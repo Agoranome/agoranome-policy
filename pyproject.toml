@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agoranome-policy"
+version = "0.1.0"
+description = "A buyer's policy for x402 payments: pay only for offers that show the proof you ask for."
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.9"
+dependencies = []
+keywords = ["x402", "agents", "payments", "fair-offer", "claude-code"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Internet :: WWW/HTTP",
+]
+
+[project.urls]
+Homepage = "https://agoranome.com/policy"
+Standard = "https://agoranome.com/standard"
+
+[project.scripts]
+agoranome-policy = "agoranome_policy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
