@@ -19,16 +19,19 @@ Drop it in front of an x402 client. Before each payment it checks that the
 buyer's proof tier (any, sampled or delivered), and that the offer carries no
 text written to steer an agent. It sends an Accept-Proof header, keeps signed
 receipts locally, and, only if the buyer opts in, reports anonymized proof
-rules and unmet intents to Agoranome's two public indexes.
+rules and unmet intents to Agoranome's two public indexes. Also opt-in: buying
+Agoranome's signed Buyer check ($0.01) when a seller is unknown or a price is
+above your threshold.
 
 No dependencies beyond the standard library.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from agoranome_policy.offer import Offer, OfferError, Option, from_header, from_json, from_response  # noqa: E402
+from agoranome_policy.paid import PaidCheck  # noqa: E402
 from agoranome_policy.policy import Choice, Decision, Policy  # noqa: E402
 from agoranome_policy.proof import TIERS  # noqa: E402
 
-__all__ = ["Choice", "Decision", "Offer", "OfferError", "Option", "Policy", "TIERS", "__version__",
+__all__ = ["Choice", "Decision", "Offer", "OfferError", "Option", "PaidCheck", "Policy", "TIERS", "__version__",
            "from_header", "from_json", "from_response"]

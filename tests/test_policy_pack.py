@@ -182,3 +182,82 @@ def test_receipts_are_signed_locally_and_edits_show(tmp_path):
 def test_a_bad_tier_is_refused():
     with pytest.raises(ValueError):
         Policy("trusted")
+
+
+# --- the opt-in paid step -------------------------------------------------------------
+
+class Paying:
+    """An operator's x402 client, as the paid step sees it: a callable that performs the paid GET."""
+
+    def __init__(self, verdict=None, fail=False):
+        self.verdict, self.fail, self.urls = verdict, fail, []
+
+    def __call__(self, url):
+        self.urls.append(url)
+        if self.fail:
+            raise RuntimeError("wallet empty")
+        return {"result": self.verdict, "receipt": {"receipt_id": "0x1"}}
+
+
+def verdict(tiers=None, contradicted=0, changed=False, certification="certified"):
+    return {"mode": "verdict", "summary": "ok",
+            "policy": {"tiers": tiers or {"any": True, "sampled": True, "delivered": True},
+                       "reasons": {t: [] if (tiers or {}).get(t, True) else ["proof_unmet"]
+                                   for t in ("any", "sampled", "delivered")}},
+            "fair_offer": {"rules": {"verified": 3, "declared": 2, "contradicted": contradicted, "absent": 2}},
+            "pay_to": {"changed_30d": changed}, "certification": {"status": certification}}
+
+
+def test_the_paid_check_is_off_unless_the_operator_builds_one():
+    decision = Policy("sampled", checker=Checker()).decide(offer(info=KEPT))
+    assert decision.allowed and "paid_check" not in decision.as_dict()
+
+
+def test_the_paid_check_is_bought_for_an_unknown_seller_and_kept_on_the_decision():
+    from agoranome_policy.paid import PaidCheck
+
+    paying = Paying(verdict())
+    policy = Policy("sampled", checker=Checker(deliveries=None), max_price_usd=0.05,
+                    paid_check=PaidCheck(paying, base_url="https://api.agoranome.test"))
+    decision = policy.decide(offer(info=KEPT), expected_price_usd=0.01)
+    assert decision.allowed and decision.as_dict()["paid_check"]["summary"] == "ok"
+    assert paying.urls == ["https://api.agoranome.test/v1/buyer/check?url=https%3A%2F%2Fapi.seller.test%2Fv1%2Fsearch"
+                           "&accept_proof=sample%3Dany%3B+instructions%3Dnone&max_price=0.05&expected_price=0.01"]
+    # A seller with verified deliveries at a cent needs no paid check under the default "unknown_or_above".
+    known = Policy("sampled", checker=Checker(deliveries=7), paid_check=PaidCheck(paying)).decide(offer(info=KEPT))
+    assert known.allowed and len(paying.urls) == 1
+    # Above the threshold it is bought even for a known seller.
+    Policy("sampled", checker=Checker(deliveries=7), paid_check=PaidCheck(paying, above_usd=0.005)).decide(offer(info=KEPT))
+    assert len(paying.urls) == 2
+
+
+def test_the_paid_check_refuses_on_its_verdict_and_flags_a_changed_pay_to():
+    from agoranome_policy.paid import PaidCheck
+
+    refused = Policy("sampled", paid_check=PaidCheck(Paying(verdict(tiers={"any": True, "sampled": False,
+                                                                           "delivered": False})))).decide(offer(info=KEPT))
+    assert not refused.allowed and codes(refused) == [policy_lib.PAID_CHECK] and "fails the sampled tier" in refused.summary
+    contradicted = Policy("sampled", paid_check=PaidCheck(Paying(verdict(contradicted=2)))).decide(offer(info=KEPT))
+    assert codes(contradicted) == [policy_lib.PAID_CHECK] and "2 Fair Offer rule(s) contradicted" in contradicted.summary
+    flagged = Policy("sampled", paid_check=PaidCheck(Paying(verdict(changed=True, certification="failing")))).decide(offer(info=KEPT))
+    assert flagged.allowed and len(flagged.flags) == 2 and "pay-to" in flagged.flags[0]
+
+
+def test_the_paid_check_keeps_to_its_daily_cap_and_survives_a_failed_purchase():
+    from agoranome_policy.paid import PaidCheck, PaidCheckError
+
+    paying = Paying(verdict())
+    step = PaidCheck(paying, daily_cap_usd=0.02, clock=lambda: 1_000_000.0)
+    policy = Policy("sampled", paid_check=step)
+    for _ in range(3):
+        decision = policy.decide(offer(info=KEPT))
+    assert len(paying.urls) == 2 and round(step.spent_today_usd, 2) == 0.02
+    assert any("cap" in f for f in decision.flags)
+    broke = Policy("sampled", paid_check=PaidCheck(Paying(fail=True))).decide(offer(info=KEPT))
+    assert broke.allowed and any("couldn't run" in f for f in broke.flags)
+    with pytest.raises(ValueError):
+        PaidCheck(paying, when="sometimes")
+    with pytest.raises(PaidCheckError):
+        PaidCheck(lambda url: "not json").verdict(URL)
+    with pytest.raises(PaidCheckError):
+        PaidCheck(lambda url: {"result": {"nothing": True}}).verdict(URL)

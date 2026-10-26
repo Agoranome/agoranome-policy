@@ -23,6 +23,10 @@ A decision runs five checks on the offer the buyer is about to pay:
 5. Proof: the buyer's tier (any, sampled or delivered), read from Agoranome's free
    checker when it's on, otherwise from what the seller's own block declares.
 
+An optional sixth, off unless the operator turns it on (see paid.py): buy
+Agoranome's signed Buyer check ($0.01) when the seller is unknown or the price is
+above a threshold, and refuse when it says the tier is not met.
+
 Raw payer counts are never used. Sweep bots pay every seller once, so a high
 payer count says nothing about delivery; "delivered" counts verified
 deliveries to wallets that aren't sweeps, from the evidence commons.
@@ -36,6 +40,7 @@ from agoranome_policy import proof
 from agoranome_policy.evidence import EvidenceClient, EvidenceError
 from agoranome_policy.instructions import instruction_like
 from agoranome_policy.offer import Offer, Option
+from agoranome_policy.paid import PaidCheck, PaidCheckError
 from agoranome_policy.receipts import ReceiptLog
 
 logger = logging.getLogger("agoranome_policy")
@@ -51,7 +56,8 @@ OVER_EXPECTED = "over_listing_or_quote"
 PAYEE = "payee_not_allowed"
 INSTRUCTIONS = "instruction_like_text"
 PROOF = "proof_unmet"
-REASONS = (NO_OPTION, NOT_USDC, OVER_CAP, OVER_EXPECTED, PAYEE, INSTRUCTIONS, PROOF)
+PAID_CHECK = "paid_check_refused"
+REASONS = (NO_OPTION, NOT_USDC, OVER_CAP, OVER_EXPECTED, PAYEE, INSTRUCTIONS, PROOF, PAID_CHECK)
 
 
 @dataclass
@@ -70,6 +76,7 @@ class Decision:
     unmet: List[Dict[str, str]] = field(default_factory=list)
     rules_source: str = "declared"
     category: Optional[str] = None
+    paid_check: Optional[Dict[str, Any]] = None
 
     @property
     def accept_proof(self) -> Optional[str]:
@@ -91,6 +98,7 @@ class Decision:
             "price_usd": self.price_usd, "expected_price_usd": self.expected_price_usd,
             "reasons": self.reasons, "flags": self.flags, "accept_proof": self.accept_proof,
             "unmet": self.unmet, "rules_source": self.rules_source,
+            **({"paid_check": self.paid_check} if self.paid_check is not None else {}),
         }
 
 
@@ -124,13 +132,14 @@ class Policy:
     telemetry       a telemetry.Reporter the buyer opted into, or None
     receipts        a receipts.ReceiptLog for signed local receipts, or None
     prefer_capture  between equal prices, prefer an auth-capture option (paid only on delivery)
+    paid_check      a paid.PaidCheck to buy Agoranome's signed Buyer check with, or None (the default: off)
     """
 
     def __init__(self, tier: str = "sampled", *, min_deliveries: int = proof.DEFAULT_MIN_DELIVERIES,
                  max_price_usd: float = DEFAULT_MAX_PRICE_USD, allow_pay_to: Optional[Iterable[str]] = None,
                  networks: Optional[Sequence[str]] = None, checker: Any = None, telemetry: Any = None,
                  receipts: Optional[ReceiptLog] = None, refuse_instructions: bool = True,
-                 prefer_capture: bool = True):
+                 prefer_capture: bool = True, paid_check: Optional[PaidCheck] = None):
         if tier not in proof.TIERS:
             raise ValueError(f"tier must be one of {', '.join(proof.TIERS)}")
         self.tier = tier
@@ -143,6 +152,7 @@ class Policy:
         self.receipts = receipts
         self.refuse_instructions = refuse_instructions
         self.prefer_capture = prefer_capture
+        self.paid_check = paid_check
 
     @property
     def requirements(self) -> List[str]:
@@ -228,6 +238,24 @@ class Policy:
         if not result["met"]:
             refuse({"code": PROOF, "detail": f"fails the {self.tier} tier: "
                                              + "; ".join(u["why"] for u in result["unmet"])})
+
+        if self.paid_check is not None and offer.url and decision.price_usd is not None:
+            unknown = decision.rules_source != "checker" or counts.get("deliveries_30d") in (None, 0)
+            if self.paid_check.wanted(decision.price_usd, unknown=unknown):
+                if not self.paid_check.within_cap():
+                    decision.flags.append("The paid Buyer check was wanted but today's cap for it is spent.")
+                else:
+                    try:
+                        verdict = self.paid_check.verdict(offer.url, accept_proof=self.accept_proof,
+                                                          max_price_usd=self.max_price_usd,
+                                                          expected_price_usd=expected)
+                    except PaidCheckError as e:
+                        decision.flags.append(f"The paid Buyer check couldn't run: {e}")
+                    else:
+                        decision.paid_check = verdict
+                        for why in self.paid_check.refusals(verdict, self.tier):
+                            refuse({"code": PAID_CHECK, "detail": why})
+                        decision.flags.extend(self.paid_check.flags(verdict))
 
         decision.allowed = not decision.reasons
         if report and self.telemetry is not None:

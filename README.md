@@ -88,6 +88,31 @@ only up to your cap, even if the agent's code is wrong.
 Agoranome's MCP server at `https://api.agoranome.com/mcp` has a free `check_offer`
 tool that runs the same decision on its side.
 
+## A signed verdict for a cent: off unless you opt in
+
+The free check reads the seller's live 402 and is unsigned. Agoranome's paid
+[Buyer check](https://agoranome.com/lab#buyer_check) ($0.01) answers from its
+stored evidence in about a second with a signed verdict: block valid and
+certified, the pay-to seen for the host and since when, price against listing and
+quote, verified deliveries, and which tiers the offer meets. The pack can buy it
+for you when the seller is unknown to the free check, or the price is above your
+threshold, within a daily cap. Paying is your own x402 client:
+
+```python
+from agoranome_policy import PaidCheck, Policy
+
+paying = x402HttpxClient(account=my_account)   # any client that performs a paid GET
+policy = Policy("sampled", checker=True,
+                paid_check=PaidCheck(lambda url: paying.get(url).json(),
+                                     when="unknown_or_above", above_usd=0.10, daily_cap_usd=0.05))
+```
+
+The policy refuses when the verdict says your tier is not met or a Fair Offer rule
+is contradicted, flags a pay-to that changed in 30 days, and keeps the verdict on
+the decision (`decision.paid_check`). If the check can't be bought, the decision
+goes on without it and says so. After paying, the same route with `tx=` returns
+settlement proof; with `share=true` your receipt enters the evidence commons.
+
 ## Telemetry: off unless you opt in
 
 Pass `telemetry=Reporter(consent=True)` or set `AGORANOME_POLICY_TELEMETRY=1`. You
