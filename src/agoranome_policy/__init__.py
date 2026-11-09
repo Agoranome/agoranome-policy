@@ -21,17 +21,25 @@ text written to steer an agent. It sends an Accept-Proof header, keeps signed
 receipts locally, and, only if the buyer opts in, reports anonymized proof
 rules and unmet intents to Agoranome's two public indexes. Also opt-in: buying
 Agoranome's signed Buyer check ($0.01) when a seller is unknown or a price is
-above your threshold.
+above your threshold; Agoranome's admission feed as a payee allowlist; and an
+expected-loss mode that pays for evidence only when the loss it could prevent
+is worth more than it costs. `before_pay(offer)` is the one-call form: the free
+checks on every payment, and the signed check only on a first payment to a
+pay-to, a price above a dime, or a seller the free checker can't vouch for.
 
 No dependencies beyond the standard library.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.5.0"
 
+from agoranome_policy.admission import AdmissionFeed  # noqa: E402
+from agoranome_policy.guard import Guard, before_pay  # noqa: E402
+from agoranome_policy.expected_loss import BaseRates, Evidence, ExpectedLoss  # noqa: E402
 from agoranome_policy.offer import Offer, OfferError, Option, from_header, from_json, from_response  # noqa: E402
 from agoranome_policy.paid import PaidCheck  # noqa: E402
 from agoranome_policy.policy import Choice, Decision, Policy  # noqa: E402
 from agoranome_policy.proof import TIERS  # noqa: E402
 
-__all__ = ["Choice", "Decision", "Offer", "OfferError", "Option", "PaidCheck", "Policy", "TIERS", "__version__",
-           "from_header", "from_json", "from_response"]
+__all__ = ["AdmissionFeed", "BaseRates", "Choice", "Decision", "Evidence", "ExpectedLoss", "Guard", "Offer",
+           "OfferError", "Option", "PaidCheck", "Policy", "TIERS", "__version__", "before_pay", "from_header",
+           "from_json", "from_response"]

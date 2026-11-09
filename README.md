@@ -88,6 +88,49 @@ only up to your cap, even if the agent's code is wrong.
 Agoranome's MCP server at `https://api.agoranome.com/mcp` has a free `check_offer`
 tool that runs the same decision on its side.
 
+## One call before paying: `before_pay`
+
+```python
+from agoranome_policy import Guard
+
+guard = Guard(pay=lambda url: paying.get(url).json())   # your x402 client performs the paid GET
+decision = guard(offer)                                  # an Offer, or the 402's decoded JSON
+if decision.allowed:
+    pay(decision.option)
+```
+
+The free checks run on every payment: price against your cap and the listing,
+payee, instruction-like text, and Agoranome's free checker. Agoranome's signed
+Buyer check ($0.01) is bought only in the tail, where it is worth its cent:
+
+- a first payment to a pay-to address the guard hasn't paid;
+- a price above a dime;
+- an expected loss above the check's cent: (1 - p) x price > $0.01, where p is the
+  seller's delivery odds from the free checker (a probability with a 95% range;
+  null when Agoranome holds no evidence on the seller and no base rate yet, which
+  this rule then leaves to the others);
+- a seller the free checker couldn't vouch for.
+
+A routine repeat payment of a few cents to a known seller pays without one.
+Without `pay=`, nothing is bought, and the decision says where a check would
+have been worth it. Keep one guard for an agent's run so its daily cap ($0.05,
+five checks) and the pay-to addresses it has paid hold across calls.
+`before_pay(offer, pay=...)` does this with one guard per set of options, and
+`install(client, guard)` runs a guard in the x402 client's before-payment hook.
+
+To keep the pay-to addresses between runs, give the guard a file:
+
+```python
+guard = Guard(pay=..., memory="~/.agoranome/pay-to.json")   # or set AGORANOME_POLICY_MEMORY
+```
+
+A pay-to is remembered when the guard allows a payment to it, for 30 days after
+the last one (`memory_days=`), so a seller you haven't paid in a month is checked
+again. `guard.forget(pay_to)` drops one whose payment didn't go through. The file
+holds only addresses and dates. A file that can't be read or written never stops
+a payment: the guard works from memory and the decision flags it, and a file it
+didn't write is never overwritten.
+
 ## A signed verdict for a cent: off unless you opt in
 
 The free check reads the seller's live 402 and is unsigned. Agoranome's paid
@@ -112,6 +155,58 @@ is contradicted, flags a pay-to that changed in 30 days, and keeps the verdict o
 the decision (`decision.paid_check`). If the check can't be bought, the decision
 goes on without it and says so. After paying, the same route with `tx=` returns
 settlement proof; with `share=true` your receipt enters the evidence commons.
+
+## Agoranome's admission feed as your allowlist
+
+Most runtimes ship a payee allowlist and leave it blank. Agoranome's free, signed
+[admission feed](https://agoranome.com/machines/admission) lists, by category, the
+sellers that meet published rules: **observed** (Agoranome's own paid probe
+delivered, the live price and pay-to match the listing, no OFAC match) and
+**certified** (observed, plus a Fair Offer certification passed in 30 days).
+Admission is never sold and the feed never ranks sellers.
+
+```python
+from agoranome_policy import AdmissionFeed, Policy
+
+feed = AdmissionFeed.from_url()                              # read it again daily
+policy = Policy("any", allow_pay_to=feed.payees())           # or feed.payees("certified")
+feed.in_category("web_search")                               # the admitted hosts, by host
+```
+
+The feed is signed (JWS over its RFC 8785 form, keys at
+`https://agoranome.com/.well-known/jwks.json`); check the signatures with a JOSE
+library before loading it into a wallet. It also comes as a Coinbase Developer
+Platform wallet policy, a Cloudflare Agents callback and a Cedar policy.
+
+## Expected-loss mode: pay for evidence only when it's worth it
+
+Instead of a fixed tier, decide each payment by value of information. The
+category's prior chance of loss comes from Agoranome's free
+[base rates](https://agoranome.com/machines/base-rates); the seller's own evidence
+(its admission tier, a verified sample, verified deliveries, a contradicted rule)
+updates it; expected loss is the price times the result.
+
+```python
+from agoranome_policy import AdmissionFeed, BaseRates, ExpectedLoss, PaidCheck, Policy
+
+policy = Policy("any", checker=True,
+                expected_loss=ExpectedLoss(BaseRates.from_url(), admission=AdmissionFeed.from_url(),
+                                           check_cost_usd=0.01, refuse_above=0.5),
+                paid_check=PaidCheck(lambda url: paying.get(url).json()))
+decision = policy.decide(offer, category="web_search")
+decision.loss   # {"action": "pay" | "check_first" | "refuse", "posterior": ..., "expected_loss_usd": ...}
+```
+
+It pays when the expected loss is no more than a check costs, buys the $0.01
+signed check first when the loss is larger (or refuses with `check_first` when no
+`paid_check` is set), and refuses when a loss is more likely than `refuse_above`.
+A $0.005 chain read from an observed seller needs nothing; a $1 call to an unseen
+host is worth a $0.01 check first.
+
+When the free checker gives the seller's delivery odds (Agoranome's posterior from
+its paid probes, reconciled deliveries, returning buyers and settlement proofs,
+each counting less as it ages), the chance of loss is the larger of `1 - p` and
+the posterior above. The odds can only add caution here, never remove it.
 
 ## Telemetry: off unless you opt in
 
