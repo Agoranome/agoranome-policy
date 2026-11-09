@@ -45,8 +45,9 @@ KEPT = {"version": "0.2", "sample": {"url": "/v1/search/sample"}, "data_not_inst
 class Checker:
     """Agoranome's free checker, as the policy sees it."""
 
-    def __init__(self, deliveries=7, listing=None, fail=False, sample="verified"):
+    def __init__(self, deliveries=7, listing=None, fail=False, sample="verified", odds=None):
         self.deliveries, self.listing, self.fail, self.sample = deliveries, listing, fail, sample
+        self.odds = odds
         self.calls = []
 
     def check(self, url, accept_proof=None):
@@ -57,7 +58,9 @@ class Checker:
                           "FO-4": {"status": self.sample, "attested": False},
                           "FO-6": {"status": "declared"}},
                 "evidence": {"deliveries_30d": self.deliveries} if self.deliveries is not None else None,
-                "listing": {"indexed": True, "price_usd": self.listing} if self.listing is not None else {}}
+                "listing": {"indexed": True, "price_usd": self.listing} if self.listing is not None else {},
+                **({"delivery_odds": {"p": self.odds, "range_95": [0.0, 1.0], "observations": 3.0}}
+                   if self.odds is not None else {})}
 
 
 class Telemetry:
