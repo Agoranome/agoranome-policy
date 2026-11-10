@@ -46,19 +46,30 @@ To keep the pay-to addresses between runs, give the guard a file: `Guard(pay=...
 (or set AGORANOME_POLICY_MEMORY to its path). A pay-to is remembered when the guard allows a payment to it, for
 `memory_days` (30) after the last one, so a seller unpaid for a month is checked again. The file holds only
 addresses and dates; a file that can't be read or written leaves the guard working from what it holds in memory.
+
+To let the guard learn from your own payments, give it a receipt log and record each payment's outcome:
+`Guard(pay=..., receipts="~/.agoranome/receipts.jsonl")`, then `guard.record(decision, status=200, settled=True,
+response=body)`. It keeps a private Beta per pay-to from its own signed receipts and joins it with Agoranome's
+delivery odds (edge.py), so after about ten calls your own experience leads; `decision.own_odds` shows the result,
+and the expected-loss rule reads it. `guard.choose(offers)` picks the cheapest admissible offer and, among offers
+at the same price, tries them in the order of one draw from each one's Beta. Nothing of the record leaves your
+machine.
 """
 
 import json
 import os
+import random
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Set, Tuple, Union
 
+from agoranome_policy.edge import OwnRecord
 from agoranome_policy.evidence import DEFAULT_BASE
 from agoranome_policy.offer import Offer, from_json
 from agoranome_policy.paid import PaidCheck
-from agoranome_policy.policy import DEFAULT_MAX_PRICE_USD, Decision, Policy
+from agoranome_policy.policy import DEFAULT_MAX_PRICE_USD, Choice, Decision, Policy
+from agoranome_policy.receipts import ReceiptLog
 
 ABOVE_USD = 0.10          # a price from which a check is worth its cent
 CHECK_USD = 0.01          # what Agoranome's signed Buyer check costs
@@ -165,6 +176,9 @@ class Guard:
     known_pay_to   pay-to addresses already paid, so a first payment to them doesn't buy a check
     memory         a JSON file that keeps the pay-to addresses paid between runs (None: AGORANOME_POLICY_MEMORY,
                    or none); memory_days: how long one is remembered after its last payment
+    receipts       a receipt log (a ReceiptLog or a path) to learn the buyer's own delivery record from, and to
+                   write each recorded payment to (None: no record of its own)
+    rng            the random source for choose()'s draws among ties (None: Python's)
     """
 
     tier = "any"
@@ -173,7 +187,9 @@ class Guard:
                  above_usd: float = ABOVE_USD, daily_cap_usd: float = DAILY_CAP_USD, checker: Any = True,
                  base_url: str = DEFAULT_BASE, allow_pay_to: Optional[Iterable[str]] = None,
                  networks: Optional[Sequence[str]] = None, known_pay_to: Iterable[str] = (),
-                 memory: Optional[Union[str, "os.PathLike[str]"]] = None, memory_days: float = MEMORY_DAYS):
+                 memory: Optional[Union[str, "os.PathLike[str]"]] = None, memory_days: float = MEMORY_DAYS,
+                 receipts: Optional[Union[ReceiptLog, str, "os.PathLike[str]"]] = None,
+                 rng: Optional[random.Random] = None):
         self.free = Policy("any", max_price_usd=max_price_usd, checker=checker, allow_pay_to=allow_pay_to,
                            networks=networks)
         self.paid_check = (PaidCheck(pay, base_url=base_url, when="always", daily_cap_usd=daily_cap_usd)
@@ -187,6 +203,11 @@ class Guard:
         self.memory: Optional[Memory] = Memory(path, memory_days) if path else None
         if self.memory is not None:
             self.known |= self.memory.known()
+        if receipts is not None and not isinstance(receipts, ReceiptLog):
+            receipts = ReceiptLog(os.path.expanduser(os.fspath(receipts)))
+        self.receipts: Optional[ReceiptLog] = receipts
+        self.own = OwnRecord(receipts)
+        self.rng = rng
 
     def forget(self, pay_to: str) -> None:
         """Forget a pay-to (a payment the guard allowed that didn't go through), here and in the memory file."""
@@ -209,12 +230,13 @@ class Guard:
             return "a first payment to this pay-to address"
         if decision.price_usd is not None and decision.price_usd > self.above_usd + 1e-12:
             return f"a price above ${self.above_usd:g}"
-        odds = (decision.delivery_odds or {}).get("p")
+        odds = (decision.own_odds or decision.delivery_odds or {}).get("p")
         if decision.price_usd is not None and isinstance(odds, (int, float)):
             loss = (1.0 - float(odds)) * decision.price_usd
             if loss > CHECK_USD + 1e-12:
-                return (f"an expected loss of ${loss:.4f} at delivery odds of {float(odds):.0%}, more than the "
-                        f"check's ${CHECK_USD:g}")
+                whose = " (with your own record)" if decision.own_odds is not None else ""
+                return (f"an expected loss of ${loss:.4f} at delivery odds of {float(odds):.0%}{whose}, more than "
+                        f"the check's ${CHECK_USD:g}")
         if decision.rules_source != "checker":
             return "a seller the free checker couldn't vouch for"
         return None
@@ -223,12 +245,14 @@ class Guard:
                report: bool = True) -> Decision:
         offer = _offer(offer)
         decision = self.free.decide(offer, expected_price_usd=expected_price_usd, category=category, report=False)
+        self._own_odds(decision)
         if not decision.allowed:
             return decision
         why = self.why_check(decision)
         if why is not None and self.checked is not None:
             decision = self.checked.decide(offer, expected_price_usd=expected_price_usd, category=category,
                                            report=False)
+            self._own_odds(decision)
             if decision.paid_check is not None:
                 decision.flags.insert(0, f"Bought Agoranome's signed Buyer check: {why}.")
         elif why is not None:
@@ -243,6 +267,54 @@ class Guard:
         return decision
 
     __call__ = decide
+
+    def _own_odds(self, decision: Decision) -> None:
+        if decision.option is not None:
+            decision.own_odds = self.own.beta(decision.option.pay_to, decision.delivery_odds)
+
+    def record(self, decision: Decision, *, status: Optional[int] = None, response: bytes = b"",
+               transaction: Optional[str] = None, settled: Optional[bool] = None,
+               seller_receipt: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """After paying: the payment's outcome, learned from (a settled 2xx at the price expected counts good) and
+        written as a signed receipt when the guard has a log. Returns the receipt, or None without a log."""
+        option = decision.as_dict()["option"]
+        line = {"option": option, "decision": {k: v for k, v in decision.as_dict().items() if k != "option"},
+                "status": status, "settled": settled}
+        if self.receipts is not None:
+            line = self.receipts.record(url=decision.url, option=option, decision=line["decision"], status=status,
+                                        response=response, transaction=transaction, settled=settled,
+                                        seller_receipt=seller_receipt,
+                                        instruction_hits=self.free.inspect_response(response))
+        self.own.add(line)
+        return line if self.receipts is not None else None
+
+    def choose(self, offers: Sequence[Any], *, intent: Optional[str] = None,
+               expected_prices: Optional[Mapping[str, float]] = None, category: Optional[str] = None) -> Choice:
+        """The cheapest offer the guard allows. The free checks run on every candidate; among the admissible ones
+        at the lowest price, one draw from each one's Beta (your record joined with Agoranome's odds) orders the
+        tries, and a check is bought, where one is worth its cent, only for the offer about to be paid."""
+        offers = [_offer(o) for o in offers]
+        expected = dict(expected_prices or {})
+        free = [self.free.decide(o, expected_price_usd=expected.get(o.url), category=category, report=False)
+                for o in offers]
+        for d in free:
+            self._own_odds(d)
+        admitted = [(d, o) for d, o in zip(free, offers) if d.allowed and d.price_usd is not None]
+        draws = {id(d): self.own.draw(d.option.pay_to, d.delivery_odds, self.rng) for d, _ in admitted}
+        admitted.sort(key=lambda pair: (round(pair[0].price_usd, 9), -draws[id(pair[0])]))
+        decisions = list(free)
+        place = {id(d): i for i, d in enumerate(free)}
+        for d, o in admitted:
+            final = self.decide(o, expected_price_usd=expected.get(o.url), category=category)
+            if final.allowed:
+                final.flags.append(f"Chosen among {len(admitted)} admissible offers: the cheapest"
+                                   + (", and the best of one draw from each one's odds among those at its price"
+                                      if sum(abs(x.price_usd - d.price_usd) < 1e-9 for x, _ in admitted) > 1
+                                      else "") + ".")
+                decisions[place[id(d)]] = final
+                return Choice(intent=intent, decision=final, decisions=decisions)
+            decisions[place[id(d)]] = final
+        return Choice(intent=intent, decision=None, decisions=decisions)
 
 
 _guards: Dict[Tuple[Any, ...], Guard] = {}

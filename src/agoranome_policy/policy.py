@@ -94,6 +94,7 @@ class Decision:
     paid_check: Optional[Dict[str, Any]] = None
     loss: Optional[Dict[str, Any]] = None
     delivery_odds: Optional[Dict[str, Any]] = None   # the free checker's: p, range_95, observations
+    own_odds: Optional[Dict[str, Any]] = None   # a Guard's: the buyer's own record joined with them (edge.py)
 
     @property
     def accept_proof(self) -> Optional[str]:
@@ -118,6 +119,7 @@ class Decision:
             **({"paid_check": self.paid_check} if self.paid_check is not None else {}),
             **({"loss": self.loss} if self.loss is not None else {}),
             **({"delivery_odds": self.delivery_odds} if self.delivery_odds is not None else {}),
+            **({"own_odds": self.own_odds} if self.own_odds is not None else {}),
         }
 
 

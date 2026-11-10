@@ -155,7 +155,7 @@ def test_expected_loss_replaces_the_tiers_proof_rules_but_nothing_else():
     assert not Policy("sampled").decide(bare).allowed
     decided = Policy("sampled", expected_loss=ExpectedLoss()).decide(bare)
     assert decided.allowed and decided.loss["action"] == PAY and decided.unmet, "still shown, no longer refused"
-    assert agoranome_policy.__version__ == "0.5.0"
+    assert agoranome_policy.__version__ == "0.6.0"
     assert {"AdmissionFeed", "BaseRates", "Evidence", "ExpectedLoss"} <= set(agoranome_policy.__all__)
 
 
