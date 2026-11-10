@@ -26,20 +26,27 @@ expected-loss mode that pays for evidence only when the loss it could prevent
 is worth more than it costs. `before_pay(offer)` is the one-call form: the free
 checks on every payment, and the signed check only on a first payment to a
 pay-to, a price above a dime, or a seller the free checker can't vouch for.
+A Guard given a receipt log learns from the buyer's own payments, on the buyer's
+machine only. `annotate(offer)` labels each claim an offer makes (verified,
+unverified, contradicted or steering), and `referee(url)` reads and checks a
+referee's signed Fair Referee file.
 
 No dependencies beyond the standard library.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 from agoranome_policy.admission import AdmissionFeed  # noqa: E402
+from agoranome_policy.claims import annotate  # noqa: E402
+from agoranome_policy.edge import OwnRecord  # noqa: E402
 from agoranome_policy.guard import Guard, before_pay  # noqa: E402
 from agoranome_policy.expected_loss import BaseRates, Evidence, ExpectedLoss  # noqa: E402
 from agoranome_policy.offer import Offer, OfferError, Option, from_header, from_json, from_response  # noqa: E402
 from agoranome_policy.paid import PaidCheck  # noqa: E402
 from agoranome_policy.policy import Choice, Decision, Policy  # noqa: E402
 from agoranome_policy.proof import TIERS  # noqa: E402
+from agoranome_policy.referees import RefereeError, referee  # noqa: E402
 
 __all__ = ["AdmissionFeed", "BaseRates", "Choice", "Decision", "Evidence", "ExpectedLoss", "Guard", "Offer",
-           "OfferError", "Option", "PaidCheck", "Policy", "TIERS", "__version__", "before_pay", "from_header",
-           "from_json", "from_response"]
+           "OfferError", "Option", "OwnRecord", "PaidCheck", "Policy", "RefereeError", "TIERS", "__version__",
+           "annotate", "before_pay", "from_header", "from_json", "from_response", "referee"]

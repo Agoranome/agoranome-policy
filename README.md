@@ -131,6 +131,77 @@ holds only addresses and dates. A file that can't be read or written never stops
 a payment: the guard works from memory and the decision flags it, and a file it
 didn't write is never overwritten.
 
+### Learning from your own payments
+
+Give the guard a receipt log and tell it how each payment went:
+
+```python
+guard = Guard(pay=..., receipts="~/.agoranome/receipts.jsonl")
+decision = guard(offer)
+if decision.allowed:
+    response = paying.get(url)                       # your x402 client pays
+    guard.record(decision, status=response.status_code, settled=True, response=response.content)
+```
+
+The guard keeps a private Beta per pay-to from its own signed receipts: a
+settled payment answered 2xx at no more than the price expected counts good,
+any other settled payment counts bad. It joins that with Agoranome's delivery
+odds by precision weighting, Agoranome's evidence counting as at most ten
+observations, so after about ten calls your own experience leads:
+
+    a = good + n p,   b = bad + n (1 - p),   n = min(observations, 10)
+
+`decision.own_odds` shows the result, and the expected-loss rule above reads it,
+so a seller that keeps failing you is checked again even when it's known. A
+receipt whose signature doesn't check is not counted. Nothing of the record
+leaves your machine; telemetry never carries it.
+
+`guard.choose(offers)` picks the cheapest offer the guard allows. Among
+admissible offers at the same price, it draws once from each one's Beta and
+tries them in the order of the draws (Thompson sampling): a seller that has
+served you well is tried first more often, and a new one still gets its turn.
+The free checks run on every candidate; a check is bought, where one is worth
+its cent, only for the offer about to be paid.
+
+## Claim labels: `annotate(offer)`
+
+```python
+from agoranome_policy import annotate
+
+for claim in annotate(offer, counts={"payers_30d": 40}):
+    print(claim["kind"], claim["status"], claim["text"])
+```
+
+Each claim an offer's own words make, tagged by kind (count, standing,
+endorsement, urgency, authority, pledge, instruction) and status: `verified`
+(the Bazaar's own 30-day count agrees within 10%, or a record you pass in
+does), `unverified`, `contradicted` (a 30-day payer or call count the Bazaar's
+own count is more than 10% below), or `steering` (urgency and instructions).
+Nothing is stripped: give your model the label beside the text. An honest
+seller's true but unprovable claim reads "unverified", never "false". The free
+checker's `listing` holds the counts. The same rules label the claims in
+Agoranome's signed Buyer check.
+
+## A referee's own rules: `referee(url)`
+
+```python
+from agoranome_policy import referee
+
+found = referee("https://agoranome.com/.well-known/fair-referee.json")
+if found["signed"]:
+    print([rule["id"] for rule in found["rules"]])
+```
+
+A referee of x402 sellers (Agoranome, or anyone who publishes a file of the same
+shape) states the rules it binds itself to at `/.well-known/fair-referee.json`:
+no paid placement, every qualifying seller listed, sort keys stated, methods and
+coefficients published, its own offers under the same probes and grades, each
+with how to check it. `referee()` reads the file and checks its JWS signatures
+against the keys at the same site's `/.well-known/jwks.json` (a key set on
+another site is never read). EdDSA is checked with the standard library alone;
+ES256K and ES256 are checked when the `cryptography` package is installed, and
+reported as not checked otherwise. `signed` is True when one signature checks.
+
 ## A signed verdict for a cent: off unless you opt in
 
 The free check reads the seller's live 402 and is unsigned. Agoranome's paid
