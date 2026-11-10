@@ -20,7 +20,9 @@ response can carry the same thing. These are the patterns the Bazaar screens
 listings for and Agoranome's listing lint flags.
 """
 
+import html
 import re
+import unicodedata
 from typing import List
 
 INSTRUCTION_PATTERNS = [
@@ -35,10 +37,40 @@ INSTRUCTION_PATTERNS = [
     r"<\s*/?\s*(system|instructions?|prompt)\s*>",
     r"\[\s*/?\s*(system|inst)\s*\]",
 ]
-_RE = re.compile("|".join(INSTRUCTION_PATTERNS), re.IGNORECASE)
+INSTRUCTION_PATTERNS_ADDED = [
+    r"\bforget (all |any |the |your )?(previous|prior|earlier|above|preceding|other) (instructions?|prompts?|rules?|messages?)\b",
+    r"\boverride (all |any |your )(previous |prior |other )?(instructions?|rules?|system prompt)\b",
+    r"\bnew instructions?\s*:",
+    r"<\|\s*(im_start|im_end|system|assistant|endoftext)\s*\|>",
+    r"\bthe only (tool|service|api|option|seller) (you|agents?|models?) (should|must|may) (call|use|pick|choose|select)\b",
+]
+_RE = re.compile("|".join(INSTRUCTION_PATTERNS + INSTRUCTION_PATTERNS_ADDED), re.IGNORECASE)
 MAX_SCAN_CHARS = 200_000
+
+# Text a model still reads where a person's eye or a plain regex would miss it: HTML character references, compatibility forms
+# (fullwidth letters), invisible format characters (zero-width, soft hyphen, bidi controls, tag characters), Cyrillic
+# and Greek letters that look Latin, and any run of whitespace. The patterns are matched on the text so normalized.
+_CONFUSABLES = str.maketrans({
+    "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c", "\u0443": "y", "\u0445": "x",
+    "\u0456": "i", "\u0458": "j", "\u0455": "s", "\u0501": "d", "\u04bb": "h", "\u0410": "A", "\u0412": "B",
+    "\u0415": "E", "\u041a": "K", "\u041c": "M", "\u041d": "H", "\u041e": "O", "\u0420": "P", "\u0421": "C",
+    "\u0422": "T", "\u0425": "X", "\u0406": "I", "\u0408": "J", "\u0405": "S", "\u03bf": "o", "\u039f": "O",
+    "\u03b1": "a", "\u03b9": "i", "\u0399": "I", "\u03bd": "v", "\u03c1": "p", "\u0391": "A", "\u0392": "B",
+    "\u0395": "E", "\u0397": "H", "\u039a": "K", "\u039c": "M", "\u039d": "N", "\u03a4": "T", "\u03a7": "X",
+    "\u03a5": "Y", "\u0396": "Z",
+})
+_SPACES = re.compile(r"\s+")
+
+
+def normalized(text: str) -> str:
+    """The text as a model reads it, for matching: references decoded, compatibility forms folded, invisible
+    characters dropped, look-alike letters made Latin, whitespace runs made one space."""
+    text = unicodedata.normalize("NFKC", html.unescape(text or ""))
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    return _SPACES.sub(" ", text.translate(_CONFUSABLES))
 
 
 def instruction_like(text: str) -> List[str]:
-    """Phrases in `text` that read as instructions to a buyer agent."""
-    return sorted({m.group(0) for m in _RE.finditer((text or "")[:MAX_SCAN_CHARS])})
+    """Phrases in `text` that read as instructions to a buyer agent, matched on the text as a model reads it
+    (`normalized`), so a hidden character or a look-alike letter doesn't hide one."""
+    return sorted({m.group(0) for m in _RE.finditer(normalized((text or "")[:MAX_SCAN_CHARS]))})
