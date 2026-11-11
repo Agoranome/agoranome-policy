@@ -264,3 +264,31 @@ def test_the_paid_check_keeps_to_its_daily_cap_and_survives_a_failed_purchase():
         PaidCheck(lambda url: "not json").verdict(URL)
     with pytest.raises(PaidCheckError):
         PaidCheck(lambda url: {"result": {"nothing": True}}).verdict(URL)
+
+
+def test_the_sheet_tier_admits_the_widest_list_and_each_tier_admits_those_above():
+    from agoranome_policy import AdmissionFeed
+
+    feed = AdmissionFeed({"day": "2026-11-12", "sellers": [
+        {"host": "c.example", "tier": "certified", "pay_to": ["0x" + "cc" * 20], "categories": ["news"]},
+        {"host": "o.example", "tier": "observed", "pay_to": ["0x" + "0b" * 20], "categories": ["news"]},
+        {"host": "s.example", "tier": "sheet", "pay_to": ["0x" + "5e" * 20], "categories": ["news"]}]})
+    assert len(feed.payees("sheet")) == 3 and len(feed.payees()) == 2 and len(feed.payees("certified")) == 1
+    assert feed.admits("0x" + "5e" * 20, tier="sheet") and not feed.admits("0x" + "5e" * 20)
+    assert feed.in_category("news", "sheet") == ["c.example", "o.example", "s.example"]
+    try:
+        feed.payees("gold")
+        raise AssertionError("an unknown tier must be refused")
+    except ValueError:
+        pass
+
+
+def test_a_free_buyer_check_counts_nothing_against_the_cap():
+    from agoranome_policy import PaidCheck
+
+    answers = [{"result": {"policy": {"tiers": {}}}}, {"result": {"policy": {"tiers": {}}}, "receipt": {"id": "r"}}]
+    check = PaidCheck(lambda url: answers.pop(0), daily_cap_usd=0.05)
+    check.verdict("https://seller.example/x")
+    assert check.spent_today_usd == 0
+    check.verdict("https://seller.example/x")
+    assert abs(check.spent_today_usd - 0.01) < 1e-9

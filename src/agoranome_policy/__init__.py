@@ -34,7 +34,7 @@ referee's signed Fair Referee file.
 No dependencies beyond the standard library.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 from agoranome_policy.admission import AdmissionFeed  # noqa: E402
 from agoranome_policy.claims import annotate  # noqa: E402
