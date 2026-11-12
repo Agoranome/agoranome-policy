@@ -101,7 +101,9 @@ if decision.allowed:
 
 The free checks run on every payment: price against your cap and the listing,
 payee, instruction-like text, and Agoranome's free checker. Agoranome's signed
-Buyer check ($0.01) is bought only in the tail, where it is worth its cent:
+Buyer check (free since 11 November 2026; it cost $0.01 before) is asked for only
+in the tail, where it adds most. The rule below still uses a cent as the bar, so a
+routine payment isn't slowed by a second call:
 
 - a first payment to a pay-to address the guard hasn't paid;
 - a price above a dime;
@@ -202,15 +204,18 @@ another site is never read). EdDSA is checked with the standard library alone;
 ES256K and ES256 are checked when the `cryptography` package is installed, and
 reported as not checked otherwise. `signed` is True when one signature checks.
 
-## A signed verdict for a cent: off unless you opt in
+## A signed verdict, free: off unless you opt in
 
-The free check reads the seller's live 402 and is unsigned. Agoranome's paid
-[Buyer check](https://agoranome.com/lab#buyer_check) ($0.01) answers from its
+The free check reads the seller's live 402 and is unsigned. Agoranome's
+[Buyer check](https://agoranome.com/lab#buyer_check) (free since 11 November 2026;
+it was $0.01, and an answer that still carries a receipt counts $0.01 against your
+daily cap) answers from its
 stored evidence in about a second with a signed verdict: block valid and
 certified, the pay-to seen for the host and since when, price against listing and
-quote, verified deliveries, and which tiers the offer meets. The pack can buy it
-for you when the seller is unknown to the free check, or the price is above your
-threshold, within a daily cap. Paying is your own x402 client:
+quote, verified deliveries, and which tiers the offer meets. The pack can ask for
+it when the seller is unknown to the free check, or the price is above your
+threshold, within a daily cap. Asking is any GET; your own x402 client passes the
+free answer through:
 
 ```python
 from agoranome_policy import PaidCheck, Policy
@@ -231,16 +236,22 @@ settlement proof; with `share=true` your receipt enters the evidence commons.
 
 Most runtimes ship a payee allowlist and leave it blank. Agoranome's free, signed
 [admission feed](https://agoranome.com/machines/admission) lists, by category, the
-sellers that meet published rules: **observed** (Agoranome's own paid probe
-delivered, the live price and pay-to match the listing, no OFAC match) and
-**certified** (observed, plus a Fair Offer certification passed in 30 days).
-Admission is never sold and the feed never ranks sellers.
+sellers that meet published rules, in three tiers from the widest: **sheet** (on
+the Agoranome inspector's newest signed sheet, every offer asked what its listing
+shows and paid an address the listing names, with no paid test; served when
+asked), **observed** (Agoranome's own paid probe delivered, the live price and
+pay-to match the listing, no OFAC match) and **certified** (observed, plus a Fair
+Offer certification passed in 30 days). Certification is no longer sold, so the
+certified tier empties as the last certificates age out. A tier admits the tiers
+above it. Admission is never sold and the feed never ranks sellers.
 
 ```python
 from agoranome_policy import AdmissionFeed, Policy
 
 feed = AdmissionFeed.from_url()                              # read it again daily
-policy = Policy("any", allow_pay_to=feed.payees())           # or feed.payees("certified")
+policy = Policy("any", allow_pay_to=feed.payees())           # observed and certified
+wide = AdmissionFeed.from_url(tier="sheet")                  # hundreds of sellers, no paid test
+policy = Policy("any", allow_pay_to=wide.payees("sheet"))
 feed.in_category("web_search")                               # the admitted hosts, by host
 ```
 
@@ -268,11 +279,11 @@ decision = policy.decide(offer, category="web_search")
 decision.loss   # {"action": "pay" | "check_first" | "refuse", "posterior": ..., "expected_loss_usd": ...}
 ```
 
-It pays when the expected loss is no more than a check costs, buys the $0.01
+It pays when the expected loss is no more than `check_cost_usd`, asks for the
 signed check first when the loss is larger (or refuses with `check_first` when no
 `paid_check` is set), and refuses when a loss is more likely than `refuse_above`.
 A $0.005 chain read from an observed seller needs nothing; a $1 call to an unseen
-host is worth a $0.01 check first.
+host is worth a check first.
 
 When the free checker gives the seller's delivery odds (Agoranome's posterior from
 its paid probes, reconciled deliveries, returning buyers and settlement proofs,

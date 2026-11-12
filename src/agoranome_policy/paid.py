@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The opt-in paid step: buy Agoranome's signed Buyer check ($0.01) before paying a seller.
+"""The opt-in check step: ask for Agoranome's signed Buyer check before paying a seller.
+
+The Buyer check is free since 11 November 2026 (Agoranome's tools for agents are free; it sells nothing to a
+seller it grades). An answer without a receipt cost nothing and counts nothing against the daily cap; one with a
+receipt (an older deployment that still charged $0.01) counts $0.01. `pay` can be a plain GET, or the operator's
+x402 client, which passes a free answer straight through. The class keeps its name for code written against it.
 
 Off unless the operator builds a PaidCheck and hands it to the Policy. When it is
 on, the policy buys one check when the free check left the seller unknown (no
@@ -126,7 +131,8 @@ class PaidCheck:
         today = self._today()
         if self._day != today:
             self._day, self._spent_usd = today, 0.0
-        self._spent_usd += PRICE_USD
+        if body.get("receipt"):     # paid: an older deployment that still sold the check
+            self._spent_usd += PRICE_USD
         result = body.get("result") if isinstance(body.get("result"), dict) else body
         if "policy" not in result and "summary" not in result:
             raise PaidCheckError("the paid check's answer has no verdict")
