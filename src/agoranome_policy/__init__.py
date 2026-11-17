@@ -15,9 +15,12 @@
 """A buyer's policy for x402 payments: pay only for offers that show the proof you ask for.
 
 Drop it in front of an x402 client. Before each payment it checks that the
-402's price doesn't exceed the listing or the quote, that the seller meets the
-buyer's proof tier (any, sampled or delivered), and that the offer carries no
-text written to steer an agent. It sends an Accept-Proof header, keeps signed
+402's price doesn't exceed the listing or the quote, that its pay-to is one the
+listing names, that the offer carries no text written to steer an agent, and
+that the seller meets the buyer's proof tier. The default tier, facts, refuses
+on those facts alone; sampled and delivered also ask for proof; any only flags
+steering text. When Agoranome's free checker can't be reached, the listing comes
+from its last answer or from the Agoranome inspector's signed weekly sheet. It sends an Accept-Proof header, keeps signed
 receipts locally, and, only if the buyer opts in, reports anonymized proof
 rules and unmet intents to Agoranome's two public indexes. Also opt-in: buying
 Agoranome's signed Buyer check ($0.01) when a seller is unknown or a price is
@@ -34,9 +37,9 @@ referee's signed Fair Referee file.
 No dependencies beyond the standard library.
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
-from agoranome_policy.admission import AdmissionFeed  # noqa: E402
+from agoranome_policy.admission import AdmissionError, AdmissionFeed  # noqa: E402
 from agoranome_policy.claims import annotate  # noqa: E402
 from agoranome_policy.edge import OwnRecord  # noqa: E402
 from agoranome_policy.guard import Guard, before_pay  # noqa: E402
@@ -46,7 +49,9 @@ from agoranome_policy.paid import PaidCheck  # noqa: E402
 from agoranome_policy.policy import Choice, Decision, Policy  # noqa: E402
 from agoranome_policy.proof import TIERS  # noqa: E402
 from agoranome_policy.referees import RefereeError, referee  # noqa: E402
+from agoranome_policy.sheet import InspectorSheet, SheetError  # noqa: E402
 
-__all__ = ["AdmissionFeed", "BaseRates", "Choice", "Decision", "Evidence", "ExpectedLoss", "Guard", "Offer",
-           "OfferError", "Option", "OwnRecord", "PaidCheck", "Policy", "RefereeError", "TIERS", "__version__",
-           "annotate", "before_pay", "from_header", "from_json", "from_response", "referee"]
+__all__ = ["AdmissionError", "AdmissionFeed", "BaseRates", "Choice", "Decision", "Evidence", "ExpectedLoss", "Guard",
+           "InspectorSheet", "Offer", "OfferError", "Option", "OwnRecord", "PaidCheck", "Policy", "RefereeError",
+           "SheetError", "TIERS", "__version__", "annotate", "before_pay", "from_header", "from_json",
+           "from_response", "referee"]

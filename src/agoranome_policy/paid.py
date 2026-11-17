@@ -145,6 +145,8 @@ class PaidCheck:
         """Why the verdict says not to pay, for the buyer's tier."""
         out = []
         tiers = (verdict.get("policy") or {}).get("tiers") or {}
+        if tier == "facts" and "facts" not in tiers:
+            tier = "any"   # a verdict from before the facts tier: its "any" holds the price and payee checks
         if tiers.get(tier) is False:
             reasons = ((verdict.get("policy") or {}).get("reasons") or {}).get(tier) or []
             out.append(f"Agoranome's signed check says the offer fails the {tier} tier"

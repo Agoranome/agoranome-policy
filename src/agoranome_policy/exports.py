@@ -21,8 +21,10 @@
   engine enforces the payee and the cap even if the agent's code is wrong;
   the proof tier still needs this pack or the free checker.
 - cloudflare_snippet(): a confirmation callback for Cloudflare's
-  withX402Client that asks Agoranome's free checker whether an offer meets
-  the buyer's Accept-Proof before the agent pays.
+  withX402Client that asks Agoranome's free checker for the listing, refuses a
+  price above it, a pay-to it doesn't name and (from the facts tier up) text
+  written to steer an agent, and checks the buyer's Accept-Proof, before the
+  agent pays.
 """
 
 import json
@@ -94,24 +96,34 @@ def cdp_policy_for(policy: Policy, **kwargs: Any) -> Dict[str, Any]:
 
 
 CLOUDFLARE_SNIPPET = """\
-// Agoranome policy for Cloudflare's withX402Client: pay only offers that meet your proof tier.
-// The free checker reads the offer from outside (sample fetched, listing compared, receipts
-// reconciled) and answers whether it meets ACCEPT_PROOF. It sees which offer was checked,
-// not who is buying.
+// Agoranome policy for Cloudflare's withX402Client: pay only offers that keep to their listing and meet your
+// proof tier. The free checker reads the offer from outside (the listing compared, the sample fetched, receipts
+// reconciled). It sees which offer was checked, not who is buying. If it can't be reached, don't pay.
 const ACCEPT_PROOF = %(accept_proof)s;
 const MAX_PRICE_USD = %(max_price)s;
+const REFUSE_STEERING = %(refuse_steering)s;   // the facts tier and above refuse text written to steer an agent
+const V1_NETWORKS = { base: "eip155:8453", ethereum: "eip155:1", polygon: "eip155:137", arbitrum: "eip155:42161",
+                      optimism: "eip155:10", "base-sepolia": "eip155:84532" };
 
 async function confirmPayment(paymentRequirements, url) {
   const option = paymentRequirements[0];
-  if (Number(option.maxAmountRequired ?? option.amount) / 1e6 > MAX_PRICE_USD) return false;
-  if (!ACCEPT_PROOF) return true;
+  const price = Number(option.maxAmountRequired ?? option.amount) / 1e6;
+  if (price > MAX_PRICE_USD) return false;
   const check = new URL("https://api.agoranome.com/v1/fair-offer/check");
   check.searchParams.set("url", url);
-  check.searchParams.set("accept_proof", ACCEPT_PROOF);
+  if (ACCEPT_PROOF) check.searchParams.set("accept_proof", ACCEPT_PROOF);
   const res = await fetch(check, { headers: { accept: "application/json" } });
   if (!res.ok) return false;                      // can't check: don't pay
   const result = await res.json();
-  return result.accept_proof?.met === true;
+  const listing = result.listing ?? {};
+  if (typeof listing.price_usd === "number" && price > listing.price_usd + 1e-12) return false;   // above the listing
+  const network = V1_NETWORKS[option.network] ?? option.network;
+  const payees = listing.payees?.[network];
+  const payTo = String(option.payTo ?? "");
+  const same = payTo.startsWith("0x") ? payTo.toLowerCase() : payTo;
+  if (Array.isArray(payees) && payees.length && !payees.includes(same)) return false;   // a pay-to the listing doesn't name
+  if (REFUSE_STEERING && result.facts?.steering?.length) return false;                // text written to steer an agent
+  return ACCEPT_PROOF ? result.accept_proof?.met === true : true;
 }
 
 // In your Agent:
@@ -122,4 +134,5 @@ async function confirmPayment(paymentRequirements, url) {
 
 def cloudflare_snippet(policy: Policy) -> str:
     return CLOUDFLARE_SNIPPET % {"accept_proof": json.dumps(policy.accept_proof or ""),
-                                 "max_price": json.dumps(policy.max_price_usd)}
+                                 "max_price": json.dumps(policy.max_price_usd),
+                                 "refuse_steering": json.dumps(policy.tier != "any" and policy.refuse_instructions)}

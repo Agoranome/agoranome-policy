@@ -7,10 +7,16 @@ question of *which seller* to the client. This package answers it. It sits in fr
 of an x402 client, and before each payment it checks:
 
 1. **Price**: no more than your cap, and no more than the listing or the quote.
-2. **Payee**: on your allowlist, when you keep one.
+2. **Payee**: one the listing names, and on your allowlist when you keep one.
 3. **Instructions**: no text in the offer written to steer an agent.
 4. **Proof**: your tier, read from the seller's Fair Offer block and, by default,
    from Agoranome's free checker, which verifies the claims from outside.
+
+The listing comes from Agoranome's free checker. When the checker can't be reached,
+it comes from the checker's last answer for the offer, or from the
+[Agoranome inspector](https://inspector.agoranome.com/)'s signed weekly sheet,
+checked against the inspector's pinned key (see
+[When the checker is down](#when-the-checker-is-down)).
 
 It sends an `Accept-Proof` header with every unpaid request, keeps signed receipts
 on your machine, and flags instruction-like text in paid answers. It has no
@@ -20,9 +26,15 @@ dependencies beyond the Python standard library.
 
 | Tier | Accept-Proof it sends | Pays when |
 | --- | --- | --- |
-| `any` | (none) | price and payee checks pass |
-| `sampled` | `sample=any; instructions=none` | the seller offers a free sample and declares data, never instructions |
+| `facts` (the default) | (none) | the price is within your cap and the listing, the pay-to is one the listing names, and the offer has no text written to steer an agent |
+| `sampled` | `sample=any; instructions=none` | as `facts`, plus the seller offers a free sample and declares data, never instructions |
 | `delivered` | `sample=any; instructions=none; receipts=signed; deliveries_30d>=5; buyers_30d>=3` | as `sampled`, plus signed receipts and at least 5 verified deliveries in 30 days, from at least 3 distinct buyers |
+| `any` | (none) | as `facts`, but steering text is only flagged |
+
+`facts` asks the seller for nothing it has to have built, so it works on today's
+market: one listing in 5,336 carried a Fair Offer block on the inspector's sheet of
+16 November 2026, so `sampled` refuses nearly every seller. Choose `sampled` or
+`delivered` when you want proof as well as facts.
 
 Raw payer counts are never used. Sweep bots pay every seller once, so a high payer
 count says nothing about delivery. "Delivered" counts deliveries reconciled against
@@ -38,7 +50,7 @@ from x402 import x402Client
 from agoranome_policy import Policy
 from agoranome_policy.x402 import install
 
-policy = Policy("sampled", max_price_usd=0.05, checker=True)
+policy = Policy(max_price_usd=0.05, checker=True)   # the facts tier
 client = install(x402Client(), policy)        # refused offers are never signed
 headers = policy.headers()                    # send these with each unpaid request
 ```
@@ -73,6 +85,7 @@ answer contains instruction-like text. Set `AGORANOME_POLICY_TIER`,
 ### From the command line
 
 ```sh
+agoranome-policy check https://api.example.com/v1/search                   # the facts tier
 agoranome-policy check https://api.example.com/v1/search --tier delivered
 agoranome-policy export cdp --pay-to 0xYourSeller --max-price 0.05   # CDP wallet policy
 agoranome-policy export cloudflare --tier sampled                    # withX402Client callback
@@ -99,8 +112,9 @@ if decision.allowed:
     pay(decision.option)
 ```
 
-The free checks run on every payment: price against your cap and the listing,
-payee, instruction-like text, and Agoranome's free checker. Agoranome's signed
+The free checks run on every payment, at the `facts` tier unless you pass
+`tier=`: price against your cap and the listing, the pay-to against the listing
+and your allowlist, instruction-like text (refused), and Agoranome's free checker. Agoranome's signed
 Buyer check (free since 11 November 2026; it cost $0.01 before) is asked for only
 in the tail, where it adds most. The rule below still uses a cent as the bar, so a
 routine payment isn't slowed by a second call:
@@ -256,9 +270,12 @@ feed.in_category("web_search")                               # the admitted host
 ```
 
 The feed is signed (JWS over its RFC 8785 form, keys at
-`https://agoranome.com/.well-known/jwks.json`); check the signatures with a JOSE
-library before loading it into a wallet. It also comes as a Coinbase Developer
-Platform wallet policy, a Cloudflare Agents callback and a Cedar policy.
+`https://agoranome.com/.well-known/jwks.json`). `AdmissionFeed.from_url` checks
+the Ed25519 signature with the standard library before it returns the feed, against
+keys read from the feed's own site (a key set on another site is never read) or keys
+you pin with `keys=`, and raises `AdmissionError` when none checks. It also comes as
+a Coinbase Developer Platform wallet policy, a Cloudflare Agents callback and a
+Cedar policy.
 
 ## Expected-loss mode: pay for evidence only when it's worth it
 
@@ -289,6 +306,29 @@ When the free checker gives the seller's delivery odds (Agoranome's posterior fr
 its paid probes, reconciled deliveries, returning buyers and settlement proofs,
 each counting less as it ages), the chance of loss is the larger of `1 - p` and
 the posterior above. The odds can only add caution here, never remove it.
+
+## When the checker is down
+
+The facts tier needs the listing, and the listing comes from Agoranome's free
+checker at `api.agoranome.com`. If that host is slow or down, the policy waits up
+to 20 seconds and then, by default (`on_checker_down="fallback"`):
+
+1. uses the checker's last answer for the same offer, if it is less than a week
+   old (kept in memory, and on disk under `cache_dir=`; the hook and the command
+   line keep them in `~/.cache/agoranome-policy`);
+2. otherwise reads the listing from the Agoranome inspector's newest signed x402
+   sheet: the book at `inspector.agoranome.com` is checked entry by entry from the
+   first key, which is pinned in this package (`sheet.FIRST_KEY`, kid
+   `7pG2bGERXACET2iKMCbgBBKsud-c-6gA-b0aoHVkgTg`), and the sheet's SHA-256 against
+   the signed entry. The sheet is about 10 MB, read only when needed and kept for a
+   week;
+3. otherwise pays on the offer's own words, and says so in the decision's flags.
+
+`decision.listing_source` says which it was: `checker`, `cache`, `sheet <id>`, or
+`None`. Set `on_checker_down="refuse"` (or `AGORANOME_POLICY_ON_CHECKER_DOWN=refuse`,
+or `--on-checker-down refuse`) to refuse instead when no listing could be read, and
+when a `sampled` or `delivered` tier would rest on the seller's own declarations.
+`"allow"` keeps the reading from before 0.9.0: the seller's block alone.
 
 ## Telemetry: off unless you opt in
 

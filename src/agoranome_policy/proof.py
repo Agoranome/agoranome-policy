@@ -14,11 +14,12 @@
 
 """Accept-Proof: what a buyer asks for, and whether an offer's proof meets it.
 
-The grammar is the Fair Offer Standard 0.2's (agoranome.com/standard#handshake):
+The grammar is the Fair Offer Standard 0.4's (agoranome.com/standard#handshake):
 
     Accept-Proof: sample=attested; settlement=seller; price<=listing; deliveries_30d>=5
 
-Each requirement maps to one of the seven Fair Offer rules (FO-1 to FO-7).
+Each requirement maps to one of the ten Fair Offer rules (FO-1 to FO-10). 0.3 added one_offer=checked (FO-8);
+0.4 added receipts=bound (FO-3), metered=ceiling (FO-9), book=open and reports=open (FO-10).
 A rule's status is "verified" (checked from outside), "declared" (the seller
 says so in its block), "contradicted" or "absent". Statuses come from the 402's
 own block (local) or from Agoranome's free checker, which fetches the sample,
@@ -37,17 +38,27 @@ SUPPORTED = {
     "sample": ("any", "attested"),
     "settlement": ("seller", "rail", "capture_on:2xx"),
     "price": ("listing",),
-    "receipts": ("signed",),
+    "receipts": ("signed", "bound"),
     "pledge": ("ledger",),
     "instructions": ("none",),
+    "one_offer": ("checked",),
+    "metered": ("ceiling",),
+    "book": ("open",),
+    "reports": ("open",),
 }
+DELIVERY_HASH = "sha256-jcs"   # FO-3's receipts.delivery_hash in 0.4
 MAX_REQUIREMENTS = 12
 
-# Three tiers, from least to most proof. "delivered" counts verified deliveries
-# to wallets that aren't sweep bots, from at least three distinct buyers (0.8.0:
-# one wallet's five calls passed before); raw payer counts are never used,
-# because sweeps that pay every seller once inflate them.
-TIERS = ("any", "sampled", "delivered")
+# Four tiers, from least to most proof. "facts" (0.9.0, the default) asks the
+# seller for no proof and refuses on facts alone: text written to steer an agent,
+# a price above the listing, a pay-to the listing doesn't name. "sampled" adds a
+# free sample and the data-not-instructions promise. "delivered" counts verified
+# deliveries to wallets that aren't sweep bots, from at least three distinct
+# buyers (0.8.0: one wallet's five calls passed before); raw payer counts are
+# never used, because sweeps that pay every seller once inflate them. "any" checks
+# only the cap, the allowlist and the listing, and only flags steering text.
+TIERS = ("any", "facts", "sampled", "delivered")
+DEFAULT_TIER = "facts"
 DEFAULT_MIN_DELIVERIES = 5
 DEFAULT_MIN_BUYERS = 3
 
@@ -108,7 +119,7 @@ def tier_requirements(tier: str, min_deliveries: int = DEFAULT_MIN_DELIVERIES,
     buyers behind them, so one wallet calling five times doesn't pass."""
     if tier not in TIERS:
         raise ValueError(f"tier must be one of {', '.join(TIERS)}")
-    if tier == "any":
+    if tier in ("any", "facts"):
         return []
     wanted = ["sample=any", "instructions=none"]
     if tier == "delivered":
@@ -134,7 +145,7 @@ def declared_rules(info: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         rules["FO-2"] = {"status": DECLARED, "enforced_by": settlement.get("enforced_by")}
     receipts = info.get("receipts") if isinstance(info.get("receipts"), dict) else {}
     if receipts.get("signed") is True:
-        rules["FO-3"] = {"status": DECLARED}
+        rules["FO-3"] = {"status": DECLARED, "bound": receipts.get("delivery_hash") == DELIVERY_HASH}
     sample = info.get("sample") if isinstance(info.get("sample"), dict) else {}
     if sample.get("url"):
         rules["FO-4"] = {"status": DECLARED, "attested": False}
@@ -145,6 +156,14 @@ def declared_rules(info: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     pledge = info.get("pledge") if isinstance(info.get("pledge"), dict) else {}
     if pledge.get("ledger"):
         rules["FO-7"] = {"status": DECLARED}
+    if info.get("one_offer") is True:           # 0.3
+        rules["FO-8"] = {"status": DECLARED}
+    metered = info.get("metered") if isinstance(info.get("metered"), dict) else {}
+    if metered.get("scheme") == "upto" and metered.get("unit"):   # 0.4
+        rules["FO-9"] = {"status": DECLARED}
+    book = info.get("book") if isinstance(info.get("book"), dict) else {}
+    if book.get("ledger"):                      # 0.4
+        rules["FO-10"] = {"status": DECLARED, "reports": bool(book.get("reports"))}
     return rules
 
 
@@ -171,7 +190,22 @@ def met(req: Requirement, rules: Dict[str, Dict[str, Any]],
     if req.key == "price":
         return _rule(rules, "FO-5")["status"] == VERIFIED, "needs the live price checked against the listing"
     if req.key == "receipts":
-        return _rule(rules, "FO-3")["status"] in kept, "needs signed receipts"
+        rule = _rule(rules, "FO-3")
+        if req.value == "bound":
+            return (rule["status"] in kept and bool(rule.get("bound")),
+                    "needs receipts bound to a hash of what was delivered")
+        return rule["status"] in kept, "needs signed receipts"
+    if req.key == "metered":
+        return (_rule(rules, "FO-9")["status"] in kept,
+                "needs a metered offer with upto, under a ceiling the buyer signs")
+    if req.key == "book":
+        return _rule(rules, "FO-10")["status"] == VERIFIED, "needs a receipts ledger that answers"
+    if req.key == "reports":
+        rule = _rule(rules, "FO-10")
+        return rule["status"] == VERIFIED and bool(rule.get("reports")), "needs a list of buyers' reports that answers"
+    if req.key == "one_offer":
+        return (_rule(rules, "FO-8")["status"] == VERIFIED,
+                "needs the same offer read under two client profiles, with no difference confirmed")
     if req.key == "pledge":
         return _rule(rules, "FO-7")["status"] == VERIFIED, "needs a pledge with a reachable public ledger"
     if req.key == "instructions":

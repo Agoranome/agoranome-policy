@@ -14,6 +14,7 @@
 
 """agoranome-policy: check an offer, run as a Claude Code hook, or export the rules.
 
+    agoranome-policy check https://api.example.com/v1/search                   (the facts tier)
     agoranome-policy check https://api.example.com/v1/search --tier delivered
     agoranome-policy hook pre        (Claude Code PreToolUse; reads the event on stdin)
     agoranome-policy hook post       (Claude Code PostToolUse)
@@ -28,8 +29,8 @@ import sys
 from typing import List, Optional
 
 from agoranome_policy import __version__, claude_code, exports
-from agoranome_policy.policy import Policy
-from agoranome_policy.proof import TIERS
+from agoranome_policy.policy import FALLBACK, ON_CHECKER_DOWN, Policy
+from agoranome_policy.proof import DEFAULT_TIER, TIERS
 from agoranome_policy.receipts import ReceiptLog
 from agoranome_policy.telemetry import Reporter
 
@@ -37,7 +38,8 @@ from agoranome_policy.telemetry import Reporter
 def _policy(args: argparse.Namespace) -> Policy:
     return Policy(args.tier, max_price_usd=args.max_price, min_deliveries=args.min_deliveries,
                   allow_pay_to=args.pay_to or None, checker=True if not args.no_checker else None,
-                  telemetry=Reporter.from_env())
+                  telemetry=Reporter.from_env(), on_checker_down=args.on_checker_down,
+                  cache_dir=claude_code.default_cache_dir())
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -46,11 +48,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def rules(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--tier", choices=TIERS, default="sampled")
+        p.add_argument("--tier", choices=TIERS, default=DEFAULT_TIER,
+                       help="facts (default): refuse steering text, a price above the listing, a pay-to the "
+                            "listing doesn't name; sampled and delivered also ask for proof; any only flags")
         p.add_argument("--max-price", type=float, default=1.0, help="dollars per call")
         p.add_argument("--min-deliveries", type=int, default=5)
         p.add_argument("--pay-to", action="append", default=[], help="allowed payee (repeat)")
         p.add_argument("--no-checker", action="store_true", help="read only the seller's own block")
+        p.add_argument("--on-checker-down", choices=ON_CHECKER_DOWN, default=FALLBACK,
+                       help="when the free checker can't be reached: read the listing from its last answer or "
+                            "the inspector's signed sheet (fallback), refuse when none can be read (refuse), "
+                            "or read only the seller's block (allow)")
 
     check = sub.add_parser("check", help="decide whether to pay one offer, without paying")
     check.add_argument("url")

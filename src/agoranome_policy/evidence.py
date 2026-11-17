@@ -21,10 +21,14 @@ deliveries reconciled against the chain. Both lookups are free and need no key.
 Agoranome sees which offer was checked, not who is buying.
 """
 
+import hashlib
 import json
+import os
+import tempfile
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import quote, urlencode
 
@@ -55,14 +59,71 @@ def urllib_get(timeout: float) -> Getter:
     return get
 
 
+STALE_SECONDS = 7 * 86_400   # a check answer older than a week isn't used even when the checker is down
+
+
 class EvidenceClient:
+    """Agoranome's free checker.
+
+    cache_seconds  how long an answer is reused before asking again (10 minutes)
+    stale_seconds  how long the last good answer for an offer is kept for when the checker can't be reached
+                   (a week); `stale()` returns it, and the policy says when it used one
+    cache_dir      a directory to keep those last good answers in between runs (None: memory only), so a
+                   short-lived process such as the Claude Code hook has one too
+    """
+
     def __init__(self, base_url: str = DEFAULT_BASE, *, timeout: float = 20.0, get: Optional[Getter] = None,
-                 cache_seconds: float = 600.0, clock: Callable[[], float] = time.monotonic):
+                 cache_seconds: float = 600.0, clock: Callable[[], float] = time.monotonic,
+                 stale_seconds: float = STALE_SECONDS, cache_dir: Optional[str] = None,
+                 wall: Callable[[], float] = time.time):
         self.base_url = base_url.rstrip("/")
         self.get = get or urllib_get(timeout)
         self.cache_seconds = cache_seconds
         self.clock = clock
+        self.stale_seconds = stale_seconds
+        self.cache_dir = Path(os.path.expanduser(cache_dir)) if cache_dir else None
+        self.wall = wall
         self._cache: Dict[str, Tuple[float, Any]] = {}
+        self._good: Dict[str, Tuple[float, Any]] = {}
+
+    def _path(self, url: str) -> Optional[Path]:
+        if self.cache_dir is None:
+            return None
+        return self.cache_dir / "checks" / (hashlib.sha256(url.encode()).hexdigest()[:32] + ".json")
+
+    def _keep(self, url: str, data: Any) -> None:
+        """The last good answer for a URL, kept for stale()."""
+        now = self.wall()
+        self._good[url] = (now, data)
+        path = self._path(url)
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle, temporary = tempfile.mkstemp(prefix=".check-", dir=str(path.parent))
+            with os.fdopen(handle, "w") as out:
+                json.dump({"url": url, "at": now, "data": data}, out)
+            os.replace(temporary, path)
+        except (OSError, TypeError, ValueError):
+            pass   # memory still holds it
+
+    def stale(self, url: str, accept_proof: Optional[str] = None) -> Optional[Tuple[float, Dict[str, Any]]]:
+        """The last good check answer for an offer, and its age in seconds, when one is younger than
+        stale_seconds; None otherwise. For use when the checker can't be reached."""
+        key = self._check_url(url, accept_proof)
+        found = self._good.get(key)
+        if found is None:
+            path = self._path(key)
+            try:
+                kept = json.loads(path.read_text()) if path is not None else None
+            except (OSError, ValueError):
+                kept = None
+            if isinstance(kept, dict) and kept.get("url") == key and isinstance(kept.get("data"), dict):
+                found = (float(kept.get("at") or 0), kept["data"])
+        if found is None:
+            return None
+        age = max(0.0, self.wall() - found[0])
+        return (age, found[1]) if age <= self.stale_seconds else None
 
     def _json(self, url: str, missing_ok: bool = False) -> Optional[Dict[str, Any]]:
         hit = self._cache.get(url)
@@ -78,13 +139,18 @@ class EvidenceClient:
                 data = json.loads(body)
             except ValueError as e:
                 raise EvidenceError(f"{url} didn't answer JSON") from e
+            if isinstance(data, dict):
+                self._keep(url, data)
         self._cache[url] = (self.clock(), data)
         return data
 
+    def _check_url(self, url: str, accept_proof: Optional[str] = None) -> str:
+        params = {"url": url, **({"accept_proof": accept_proof} if accept_proof else {})}
+        return f"{self.base_url}{CHECK_PATH}?{urlencode(params)}"
+
     def check(self, url: str, accept_proof: Optional[str] = None) -> Dict[str, Any]:
         """Agoranome's Fair Offer check of a live offer: rule statuses, listing counts, deliveries."""
-        params = {"url": url, **({"accept_proof": accept_proof} if accept_proof else {})}
-        return self._json(f"{self.base_url}{CHECK_PATH}?{urlencode(params)}") or {}
+        return self._json(self._check_url(url, accept_proof)) or {}
 
     def evidence(self, host: str) -> Optional[Dict[str, Any]]:
         """Verified deliveries and repeat buyers for a host, or None if the commons has no record."""

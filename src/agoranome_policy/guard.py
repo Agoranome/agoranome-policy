@@ -14,8 +14,12 @@
 
 """One call before an x402 payment: `before_pay(offer)`.
 
-The free checks always run first: the price against your cap and against the listing or the quote, the payee,
-any text in the offer written to steer an agent, and what Agoranome's free checker holds on the seller.
+The free checks always run first, and refuse on facts alone (the "facts" tier, the default since 0.9.0): a price
+above your cap or above the listing or the quote, a pay-to the listing doesn't name or your allowlist leaves out,
+and any text in the offer written to steer an agent. The listing comes from Agoranome's free checker; when the
+checker can't be reached, from its last answer for the offer or from the Agoranome inspector's signed weekly sheet,
+and `on_checker_down="refuse"` refuses when no listing could be read at all. Before 0.9.0 the guard only flagged
+steering text and never compared the pay-to with the listing.
 
 Agoranome's signed Buyer check ($0.01) is bought only in the tail, where a check is worth its cent:
 
@@ -68,7 +72,8 @@ from agoranome_policy.edge import OwnRecord
 from agoranome_policy.evidence import DEFAULT_BASE
 from agoranome_policy.offer import Offer, from_json
 from agoranome_policy.paid import PaidCheck
-from agoranome_policy.policy import DEFAULT_MAX_PRICE_USD, Choice, Decision, Policy
+from agoranome_policy.policy import DEFAULT_MAX_PRICE_USD, FALLBACK, Choice, Decision, Policy
+from agoranome_policy.proof import DEFAULT_TIER
 from agoranome_policy.receipts import ReceiptLog
 
 ABOVE_USD = 0.10          # a price from which a check is worth its cent
@@ -167,6 +172,12 @@ class Guard:
     """The free checks on every payment, and Agoranome's signed Buyer check only where it is worth its cent.
 
     pay            a callable that performs the paid GET of a URL and returns its JSON body; None: never buy
+    tier           "facts" (the default: refuse steering text, a price above the listing, a pay-to the listing
+                   doesn't name), "any" (only flag steering text), "sampled" or "delivered"
+    on_checker_down  "fallback" (default), "refuse" or "allow" (see Policy)
+    sheet          the inspector's signed sheet as a second source for the listing ("auto": Agoranome's when
+                   checker=True; None: none)
+    cache_dir      where the checker's last answers and the sheet's index are kept between runs (None: memory)
     max_price_usd  never pay more than this per call
     above_usd      a price above this buys the check
     daily_cap_usd  never spend more than this on checks per UTC day
@@ -181,21 +192,23 @@ class Guard:
     rng            the random source for choose()'s draws among ties (None: Python's)
     """
 
-    tier = "any"
-
-    def __init__(self, pay: Optional[Callable[[str], Any]] = None, *, max_price_usd: float = DEFAULT_MAX_PRICE_USD,
+    def __init__(self, pay: Optional[Callable[[str], Any]] = None, *, tier: str = DEFAULT_TIER,
+                 max_price_usd: float = DEFAULT_MAX_PRICE_USD,
                  above_usd: float = ABOVE_USD, daily_cap_usd: float = DAILY_CAP_USD, checker: Any = True,
                  base_url: str = DEFAULT_BASE, allow_pay_to: Optional[Iterable[str]] = None,
                  networks: Optional[Sequence[str]] = None, known_pay_to: Iterable[str] = (),
                  memory: Optional[Union[str, "os.PathLike[str]"]] = None, memory_days: float = MEMORY_DAYS,
                  receipts: Optional[Union[ReceiptLog, str, "os.PathLike[str]"]] = None,
-                 rng: Optional[random.Random] = None):
-        self.free = Policy("any", max_price_usd=max_price_usd, checker=checker, allow_pay_to=allow_pay_to,
-                           networks=networks)
+                 rng: Optional[random.Random] = None, on_checker_down: str = FALLBACK, sheet: Any = "auto",
+                 cache_dir: Optional[str] = None):
+        self.tier = tier
+        self.free = Policy(tier, max_price_usd=max_price_usd, checker=checker, allow_pay_to=allow_pay_to,
+                           networks=networks, on_checker_down=on_checker_down, sheet=sheet, cache_dir=cache_dir)
         self.paid_check = (PaidCheck(pay, base_url=base_url, when="always", daily_cap_usd=daily_cap_usd)
                            if pay is not None else None)
-        self.checked = (Policy("any", max_price_usd=max_price_usd, checker=self.free.checker,
-                               allow_pay_to=allow_pay_to, networks=networks, paid_check=self.paid_check)
+        self.checked = (Policy(tier, max_price_usd=max_price_usd, checker=self.free.checker,
+                               allow_pay_to=allow_pay_to, networks=networks, paid_check=self.paid_check,
+                               on_checker_down=on_checker_down, sheet=self.free.sheet)
                         if self.paid_check is not None else None)
         self.above_usd = float(above_usd)
         self.known: Set[str] = {a.lower() for a in known_pay_to}
@@ -218,10 +231,10 @@ class Guard:
     # Policy's face, so install() from agoranome_policy.x402 can run a Guard.
     @property
     def accept_proof(self) -> Optional[str]:
-        return None
+        return self.free.accept_proof
 
     def headers(self) -> Dict[str, str]:
-        return {}
+        return self.free.headers()
 
     def why_check(self, decision: Decision) -> Optional[str]:
         """Why this payment is in the tail where a check is worth its cent, or None."""
