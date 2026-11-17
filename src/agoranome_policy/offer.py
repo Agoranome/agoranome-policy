@@ -28,18 +28,39 @@ from urllib.parse import urlsplit
 
 FAIR_OFFER = "fair-offer"
 
-# USDC by CAIP-2 network. Every one has six decimals.
+# USDC by CAIP-2 network, the same ten the Agoranome inspector's rule sheet-2 counts as dollars (its DOLLAR list;
+# tests/test_facts_tier.py pins the two together). Every one has six decimals. EVM contracts are compared in lower
+# case; a Solana mint is case-sensitive base58 and is compared as written.
 USDC = {
-    "eip155:8453": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    "eip155:84532": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-    "eip155:1": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-    "eip155:137": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
-    "eip155:42161": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
-    "eip155:10": "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+    "eip155:8453": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",      # Base
+    "eip155:84532": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",     # Base Sepolia
+    "eip155:1": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",         # Ethereum
+    "eip155:137": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",       # Polygon
+    "eip155:42161": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",     # Arbitrum
+    "eip155:10": "0x0b2c639c533813f4aa9d7837caf62653d097ff85",        # Optimism
+    "eip155:43114": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",     # Avalanche
+    "eip155:480": "0x79a02482a880bce3f13e09da970dc34db4cd24d1",       # World Chain
+    "eip155:143": "0x754704bc059f8c67012fed69bc8a327a5aafb603",       # Monad
+    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",   # Solana
 }
-# x402 v1 network names.
+# x402 v1 network names, as the reference SDKs list them (the inspector maps the same ones).
 LEGACY_NETWORKS = {"base": "eip155:8453", "base-sepolia": "eip155:84532", "ethereum": "eip155:1",
-                   "polygon": "eip155:137", "arbitrum": "eip155:42161", "optimism": "eip155:10"}
+                   "sepolia": "eip155:11155111", "polygon": "eip155:137", "polygon-amoy": "eip155:80002",
+                   "arbitrum": "eip155:42161", "optimism": "eip155:10", "avalanche": "eip155:43114",
+                   "avalanche-fuji": "eip155:43113", "solana": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+                   "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"}
+
+
+def asset_key(asset: str) -> str:
+    """An asset as compared: an EVM contract in lower case, anything else (a Solana mint) as written."""
+    text = str(asset or "").strip()
+    return text.lower() if text.lower().startswith("0x") else text
+
+
+def is_usdc(network: str, asset: str) -> bool:
+    """Whether (network, asset) is USDC on one of the networks in USDC."""
+    known = USDC.get(network)
+    return known is not None and known == asset_key(asset)
 
 
 class OfferError(ValueError):
@@ -59,7 +80,7 @@ class Option:
 
     @property
     def is_usdc(self) -> bool:
-        return USDC.get(self.network) == self.asset.lower()
+        return is_usdc(self.network, self.asset)
 
     @property
     def price_usd(self) -> Optional[float]:

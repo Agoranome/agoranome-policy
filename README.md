@@ -342,7 +342,7 @@ to 20 seconds and then, by default (`on_checker_down="fallback"`):
    first key, which is pinned in this package (`sheet.FIRST_KEY`, kid
    `7pG2bGERXACET2iKMCbgBBKsud-c-6gA-b0aoHVkgTg`), and the sheet's SHA-256 against
    the signed entry. The sheet is about 10 MB, read only when needed and kept for a
-   week;
+   week (0.9.0 could not read it: its reader stopped at 1 MB; use 0.9.1 or later);
 3. otherwise pays on the offer's own words, and says so in the decision's flags.
 
 `decision.listing_source` says which it was: `checker`, `cache`, `sheet <id>`, or

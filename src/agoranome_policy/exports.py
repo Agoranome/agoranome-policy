@@ -64,7 +64,7 @@ def cdp_policy(pay_to: Iterable[str], *, max_price_usd: float = 1.0, networks: O
     """A CDP policy: sign x402 exact payments only to these payees, in USDC, up to the cap."""
     if scope not in ("account", "project"):
         raise ValueError("scope must be account or project")
-    tokens = [USDC[n] for n in (networks or ["eip155:8453"]) if n in USDC]
+    tokens = [USDC[n] for n in (networks or ["eip155:8453"]) if n in USDC and n.startswith("eip155:")]   # EVM only
     if not tokens:
         raise ValueError("no USDC contract is known for those networks")
     cap = int(round(float(max_price_usd) * 1_000_000))

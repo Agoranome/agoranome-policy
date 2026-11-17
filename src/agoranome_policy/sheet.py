@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from agoranome_policy.evidence import EvidenceError, urllib_get
-from agoranome_policy.offer import LEGACY_NETWORKS, USDC
+from agoranome_policy.offer import LEGACY_NETWORKS, is_usdc
 from agoranome_policy.referees import ed25519_verify, unb64url
 
 DEFAULT_SITE = "https://inspector.agoranome.com/"
@@ -137,7 +137,7 @@ class Listing:
     def price_usd(self, network: str) -> Optional[float]:
         """The lowest USDC price the listing states on `network`, or None when it states none there."""
         prices = [int(o["amount"]) / 1_000_000 for o in self.options
-                  if o.get("network") == network and USDC.get(network) == str(o.get("asset") or "").lower()
+                  if o.get("network") == network and is_usdc(network, str(o.get("asset") or ""))
                   and str(o.get("amount") or "").isdigit()]
         return min(prices) if prices else None
 
@@ -165,7 +165,10 @@ class InspectorSheet:
                  clock: Callable[[], float] = time.time, cache_seconds: float = CACHE_SECONDS):
         self.site = site.rstrip("/") + "/"
         self.cache_dir = Path(os.path.expanduser(cache_dir)) if cache_dir else None
-        self.get = get or urllib_get(timeout)
+        # The sheet is about 10 MB, ten times what the checker's reader takes, so the sheet has its own: one byte
+        # over the largest file it accepts, so that _fetch can tell a whole file from a cut one. (0.9.0 used the
+        # checker's reader, which stopped at 1 MB, so the fallback never read a real sheet.)
+        self.get = get or urllib_get(timeout, limit=max(MAX_BOOK_BYTES, MAX_SHEET_BYTES) + 1)
         self.first_key = first_key
         self.clock = clock
         self.cache_seconds = cache_seconds
