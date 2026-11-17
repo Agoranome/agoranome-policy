@@ -22,7 +22,7 @@ dependencies beyond the Python standard library.
 | --- | --- | --- |
 | `any` | (none) | price and payee checks pass |
 | `sampled` | `sample=any; instructions=none` | the seller offers a free sample and declares data, never instructions |
-| `delivered` | `sample=any; instructions=none; receipts=signed; deliveries_30d>=5` | as `sampled`, plus signed receipts and at least 5 verified deliveries in 30 days |
+| `delivered` | `sample=any; instructions=none; receipts=signed; deliveries_30d>=5; buyers_30d>=3` | as `sampled`, plus signed receipts and at least 5 verified deliveries in 30 days, from at least 3 distinct buyers |
 
 Raw payer counts are never used. Sweep bots pay every seller once, so a high payer
 count says nothing about delivery. "Delivered" counts deliveries reconciled against

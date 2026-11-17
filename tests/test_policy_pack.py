@@ -45,9 +45,9 @@ KEPT = {"version": "0.2", "sample": {"url": "/v1/search/sample"}, "data_not_inst
 class Checker:
     """Agoranome's free checker, as the policy sees it."""
 
-    def __init__(self, deliveries=7, listing=None, fail=False, sample="verified", odds=None):
+    def __init__(self, deliveries=7, listing=None, fail=False, sample="verified", odds=None, buyers=4):
         self.deliveries, self.listing, self.fail, self.sample = deliveries, listing, fail, sample
-        self.odds = odds
+        self.odds, self.buyers = odds, buyers
         self.calls = []
 
     def check(self, url, accept_proof=None):
@@ -57,7 +57,8 @@ class Checker:
         return {"rules": {"FO-1": {"status": "verified"}, "FO-3": {"status": "declared"},
                           "FO-4": {"status": self.sample, "attested": False},
                           "FO-6": {"status": "declared"}},
-                "evidence": {"deliveries_30d": self.deliveries} if self.deliveries is not None else None,
+                "evidence": ({"deliveries_30d": self.deliveries, "counts_30d": {"buyers": self.buyers}}
+                             if self.deliveries is not None else None),
                 "listing": {"indexed": True, "price_usd": self.listing} if self.listing is not None else {},
                 **({"delivery_odds": {"p": self.odds, "range_95": [0.0, 1.0], "observations": 3.0}}
                    if self.odds is not None else {})}
@@ -114,9 +115,20 @@ def test_delivered_counts_verified_deliveries_never_payers():
     checker = Checker(deliveries=7)
     decision = Policy("delivered", checker=checker).decide(offer(info=KEPT))
     assert decision.allowed and decision.rules_source == "checker"
-    assert checker.calls == [(URL, "sample=any; instructions=none; receipts=signed; deliveries_30d>=5")]
+    assert checker.calls == [(URL, "sample=any; instructions=none; receipts=signed; deliveries_30d>=5; "
+                                   "buyers_30d>=3")]
     assert not Policy("delivered", checker=Checker(deliveries=2)).decide(offer(info=KEPT)).allowed
     assert "payers_30d" not in " ".join(proof.tier_requirements("delivered"))
+
+
+def test_one_wallets_deliveries_dont_pass_the_delivered_tier():
+    # The all-tools audit's FO1: seven deliveries from one or two wallets are not three buyers.
+    lone = Policy("delivered", checker=Checker(deliveries=7, buyers=1)).decide(offer(info=KEPT))
+    assert not lone.allowed and "buyers_30d" in lone.summary
+    assert Policy("delivered", checker=Checker(deliveries=7, buyers=3)).decide(offer(info=KEPT)).allowed
+    # A buyer can ask for more, or fewer, distinct buyers.
+    assert not Policy("delivered", min_buyers=5, checker=Checker(buyers=4)).decide(offer(info=KEPT)).allowed
+    assert Policy("delivered", min_buyers=1, checker=Checker(buyers=1)).decide(offer(info=KEPT)).allowed
 
 
 def test_a_down_checker_falls_back_to_the_block_and_says_so():

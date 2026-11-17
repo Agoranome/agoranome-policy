@@ -128,7 +128,8 @@ def test_the_cdp_export_allows_only_listed_payees_up_to_the_cap():
 
 def test_the_cloudflare_snippet_asks_the_free_checker_for_the_tier():
     snippet = exports.cloudflare_snippet(Policy("delivered", max_price_usd=0.1))
-    assert 'const ACCEPT_PROOF = "sample=any; instructions=none; receipts=signed; deliveries_30d>=5";' in snippet
+    assert ('const ACCEPT_PROOF = "sample=any; instructions=none; receipts=signed; deliveries_30d>=5; '
+            'buyers_30d>=3";') in snippet
     assert "const MAX_PRICE_USD = 0.1;" in snippet and "/v1/fair-offer/check" in snippet
 
 

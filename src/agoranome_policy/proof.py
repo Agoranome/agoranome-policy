@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 VERIFIED, DECLARED, CONTRADICTED, ABSENT = "verified", "declared", "contradicted", "absent"
 
 _TOKEN = re.compile(r"^\s*([a-z][a-z0-9_]*)\s*(=|>=|<=)\s*([a-z0-9_:.]+)\s*$", re.IGNORECASE)
-COUNTS = ("payers_30d", "calls_30d", "deliveries_30d")
+COUNTS = ("payers_30d", "calls_30d", "deliveries_30d", "buyers_30d")
 SUPPORTED = {
     "sample": ("any", "attested"),
     "settlement": ("seller", "rail", "capture_on:2xx"),
@@ -44,10 +44,12 @@ SUPPORTED = {
 MAX_REQUIREMENTS = 12
 
 # Three tiers, from least to most proof. "delivered" counts verified deliveries
-# to wallets that aren't sweep bots; raw payer counts are never used, because
-# sweeps that pay every seller once inflate them.
+# to wallets that aren't sweep bots, from at least three distinct buyers (0.8.0:
+# one wallet's five calls passed before); raw payer counts are never used,
+# because sweeps that pay every seller once inflate them.
 TIERS = ("any", "sampled", "delivered")
 DEFAULT_MIN_DELIVERIES = 5
+DEFAULT_MIN_BUYERS = 3
 
 
 @dataclass(frozen=True)
@@ -100,15 +102,18 @@ def parse(header: Optional[str]) -> Parsed:
     return parsed
 
 
-def tier_requirements(tier: str, min_deliveries: int = DEFAULT_MIN_DELIVERIES) -> List[str]:
-    """The Accept-Proof requirements a tier sends."""
+def tier_requirements(tier: str, min_deliveries: int = DEFAULT_MIN_DELIVERIES,
+                      min_buyers: int = DEFAULT_MIN_BUYERS) -> List[str]:
+    """The Accept-Proof requirements a tier sends. "delivered" asks for verified deliveries and for distinct
+    buyers behind them, so one wallet calling five times doesn't pass."""
     if tier not in TIERS:
         raise ValueError(f"tier must be one of {', '.join(TIERS)}")
     if tier == "any":
         return []
     wanted = ["sample=any", "instructions=none"]
     if tier == "delivered":
-        wanted += ["receipts=signed", f"deliveries_30d>={max(1, int(min_deliveries))}"]
+        wanted += ["receipts=signed", f"deliveries_30d>={max(1, int(min_deliveries))}",
+                   f"buyers_30d>={max(1, int(min_buyers))}"]
     return wanted
 
 

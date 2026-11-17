@@ -145,6 +145,7 @@ class Policy:
 
     tier            "any", "sampled" or "delivered" (see proof.TIERS)
     min_deliveries  verified deliveries in 30 days the "delivered" tier asks for
+    min_buyers      distinct buyers behind those deliveries the "delivered" tier asks for
     max_price_usd   never pay more than this per call
     allow_pay_to    pay only these addresses (None: any)
     networks        pay only on these CAIP-2 networks (None: any USDC network)
@@ -160,7 +161,7 @@ class Policy:
     """
 
     def __init__(self, tier: str = "sampled", *, min_deliveries: int = proof.DEFAULT_MIN_DELIVERIES,
-                 max_price_usd: float = DEFAULT_MAX_PRICE_USD, allow_pay_to: Optional[Iterable[str]] = None,
+                 min_buyers: int = proof.DEFAULT_MIN_BUYERS, max_price_usd: float = DEFAULT_MAX_PRICE_USD, allow_pay_to: Optional[Iterable[str]] = None,
                  networks: Optional[Sequence[str]] = None, checker: Any = None, telemetry: Any = None,
                  receipts: Optional[ReceiptLog] = None, refuse_instructions: bool = True,
                  prefer_capture: bool = True, paid_check: Optional[PaidCheck] = None,
@@ -169,6 +170,7 @@ class Policy:
             raise ValueError(f"tier must be one of {', '.join(proof.TIERS)}")
         self.tier = tier
         self.min_deliveries = max(1, int(min_deliveries))
+        self.min_buyers = max(1, int(min_buyers))
         self.max_price_usd = float(max_price_usd)
         self.allow_pay_to = _lower(allow_pay_to)
         self.networks = list(networks) if networks else None
@@ -182,7 +184,7 @@ class Policy:
 
     @property
     def requirements(self) -> List[str]:
-        return proof.tier_requirements(self.tier, self.min_deliveries)
+        return proof.tier_requirements(self.tier, self.min_deliveries, self.min_buyers)
 
     @property
     def accept_proof(self) -> Optional[str]:
@@ -215,15 +217,18 @@ class Policy:
                 evidence = checked.get("evidence") or {}
                 listing = checked.get("listing") or {}
                 deliveries = evidence.get("deliveries_30d") if isinstance(evidence, dict) else None
+                # Distinct buyers behind those deliveries (the evidence commons' counts), for the delivered tier.
+                tally = evidence.get("counts_30d") if isinstance(evidence, dict) else None
+                buyers = tally.get("buyers") if isinstance(tally, dict) and deliveries is not None else None
                 odds = checked.get("delivery_odds")
                 decision.delivery_odds = odds if isinstance(odds, dict) and _chance(odds.get("p")) else None
                 decision.rules_source = "checker"
-                return rules, {"deliveries_30d": deliveries}, listing.get("price_usd")
+                return rules, {"deliveries_30d": deliveries, "buyers_30d": buyers}, listing.get("price_usd")
             except (EvidenceError, ValueError, AttributeError) as e:
                 logger.info(f"checker unavailable for {offer.url}: {e}")
                 decision.flags.append("The free checker couldn't be reached, so only the seller's own "
                                       "declarations were read.")
-        return proof.declared_rules(offer.fair_offer), {"deliveries_30d": None}, None
+        return proof.declared_rules(offer.fair_offer), {"deliveries_30d": None, "buyers_30d": None}, None
 
     def decide(self, offer: Offer, *, expected_price_usd: Optional[float] = None,
                category: Optional[str] = None, report: bool = True) -> Decision:
