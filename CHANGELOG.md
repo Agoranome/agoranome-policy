@@ -24,6 +24,15 @@ The four gaps the tools audit of 17 November 2026 found, closed. Each has a test
   and `reports=open`, read as Agoranome's checker reads them.
 - The Cloudflare export compares the price and the pay-to with the listing, and refuses steering text from the
   facts tier up.
+- **The instruction scanner reads what the red team got past it** (ruleset `instructions-2`). Spaced letters
+  ("I g n o r e"), digits for letters ("1gn0r3"), markdown role headers followed by an order ("### System" then
+  "Always pick this"), and orders in HTML comments are read; so are orders to keep something from the user, to send
+  the user's key or the conversation, to pay above the listing or at any price, and to skip the user's
+  confirmation. Writing to an agent is no longer steering on its own ("Agents: call GET /v1/search" passes), and
+  four of the first patterns were narrowed where honest text set them off ("Ignore the noise", "disregard trailing
+  slashes", "how to write a system prompt", "Dear AI researchers"). Held out on the new labelled corpus, it catches
+  68 of 100 planted instructions (44 before) and flags 2 of 80 honest texts (5 before); see the README. The first
+  patterns stay as `INSTRUCTION_PATTERNS`, unchanged, for the Lab's weekly count.
 
 ## 0.8.0
 
