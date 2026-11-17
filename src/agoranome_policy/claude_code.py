@@ -31,11 +31,16 @@ x402 payment header or runs a known x402 payer.
 
 Settings come from the environment:
 
-    AGORANOME_POLICY_TIER          any | sampled | delivered   (default sampled)
+    AGORANOME_POLICY_TIER          facts | any | sampled | delivered   (default facts: refuse steering text, a
+                                   price above the listing and a pay-to the listing doesn't name)
     AGORANOME_POLICY_MAX_PRICE     dollars per call            (default 1)
     AGORANOME_POLICY_MIN_DELIVERIES                            (default 5)
     AGORANOME_POLICY_ALLOW_PAY_TO  comma-separated addresses   (default any)
     AGORANOME_POLICY_CHECKER       1 to use Agoranome's free checker (default 1), 0 for declarations only
+    AGORANOME_POLICY_ON_CHECKER_DOWN  fallback (default: its last answer, then the inspector's signed sheet)
+                                   | refuse (deny when no listing could be read) | allow (declarations only)
+    AGORANOME_POLICY_CACHE         where the checker's last answers and the sheet's index are kept
+                                   (default ~/.cache/agoranome-policy)
     AGORANOME_POLICY_RECEIPTS      receipts file (default ~/.config/agoranome-policy/receipts.jsonl)
     AGORANOME_POLICY_TELEMETRY     1 to opt in to the anonymized indexes (default off)
 """
@@ -50,7 +55,8 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 
 from agoranome_policy import __version__
 from agoranome_policy.offer import Offer, OfferError, from_response
-from agoranome_policy.policy import Policy
+from agoranome_policy.policy import FALLBACK, Policy
+from agoranome_policy.proof import DEFAULT_TIER
 from agoranome_policy.receipts import ReceiptLog
 from agoranome_policy.telemetry import Reporter, default_id_path
 
@@ -69,12 +75,22 @@ def _env_bool(name: str, default: bool) -> bool:
 def policy_from_env() -> Policy:
     pay_to = [a.strip() for a in os.environ.get("AGORANOME_POLICY_ALLOW_PAY_TO", "").split(",") if a.strip()]
     receipts = os.environ.get("AGORANOME_POLICY_RECEIPTS") or str(default_id_path().with_name("receipts.jsonl"))
-    return Policy(os.environ.get("AGORANOME_POLICY_TIER", "sampled"),
+    return Policy(os.environ.get("AGORANOME_POLICY_TIER", DEFAULT_TIER),
                   min_deliveries=int(os.environ.get("AGORANOME_POLICY_MIN_DELIVERIES", "5")),
                   max_price_usd=float(os.environ.get("AGORANOME_POLICY_MAX_PRICE", "1")),
                   allow_pay_to=pay_to or None,
                   checker=True if _env_bool("AGORANOME_POLICY_CHECKER", True) else None,
-                  telemetry=Reporter.from_env(), receipts=ReceiptLog(receipts))
+                  telemetry=Reporter.from_env(), receipts=ReceiptLog(receipts),
+                  on_checker_down=os.environ.get("AGORANOME_POLICY_ON_CHECKER_DOWN", FALLBACK),
+                  cache_dir=default_cache_dir())
+
+
+def default_cache_dir() -> str:
+    """Where the checker's last answers and the inspector sheet's index are kept between runs."""
+    if os.environ.get("AGORANOME_POLICY_CACHE"):
+        return os.environ["AGORANOME_POLICY_CACHE"]
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "agoranome-policy")
 
 
 def _strings(value: Any, key: str = "") -> Iterator[Tuple[str, str]]:

@@ -25,41 +25,94 @@ asked, ?tier=sheet), "observed" (Agoranome's own paid probe delivered, the live 
 no OFAC match) and "certified" (observed, plus a Fair Offer certification passed in 30 days). Certification is no
 longer sold, since Agoranome sells nothing to a seller it grades, so the certified tier empties as the last
 certificates pass 30 days. A tier admits the tiers above it too.
-The feed is signed (JWS over its RFC 8785 form, keys at /.well-known/jwks.json); this module reads it and leaves
-checking the signatures to a JOSE library, since the pack has no dependencies. Read it again daily.
+The feed is signed (JWS over its RFC 8785 form, keys at /.well-known/jwks.json). Since 0.9.0 `from_url` checks the
+signatures before it returns the feed, with the standard library's Ed25519 (referees.py), against keys read from the
+feed's own site (a key set on another site is never read) or against keys you pin with `keys=`; a feed with no
+signature that checks raises AdmissionError. Before 0.9.0 it loaded the feed unchecked. Read it again daily.
 """
 
 import json
 import re
-import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
+
+from agoranome_policy.evidence import EvidenceError, urllib_get
+from agoranome_policy.referees import JWKS_PATH, check, same_site
 
 DEFAULT_URL = "https://api.agoranome.com/machines/admission.json"
 SHEET, OBSERVED, CERTIFIED = "sheet", "observed", "certified"
 _RANK = {SHEET: 0, OBSERVED: 1, CERTIFIED: 2}
 _ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
+Getter = Callable[[str], Tuple[int, bytes]]
+
+
+class AdmissionError(ValueError):
+    """The feed couldn't be read, or no signature on it checks."""
+
+
+def _json(get: Getter, url: str) -> Any:
+    try:
+        status, body = get(url)
+    except EvidenceError as e:
+        raise AdmissionError(str(e)) from e
+    if not 200 <= status < 300:
+        raise AdmissionError(f"{url} answered {status}")
+    try:
+        return json.loads(body.decode("utf-8") if isinstance(body, bytes) else body)
+    except (ValueError, UnicodeDecodeError) as e:
+        raise AdmissionError(f"{url} didn't answer JSON") from e
+
+
+def signatures(doc: Dict[str, Any], url: str, keys: Optional[List[Dict[str, Any]]] = None,
+               get: Optional[Getter] = None) -> List[Dict[str, Any]]:
+    """Each signature on a feed read from `url`, checked: {kid, alg, verified, why}. Without `keys`, the key set is
+    read from the feed's `jwks` when that is on the feed's own site, else from the site's /.well-known/jwks.json."""
+    if keys is None:
+        parts = urlsplit(url)
+        jwks = str(doc.get("jwks") or "")
+        if not jwks or not same_site(jwks, url):
+            jwks = f"https://{parts.netloc}{JWKS_PATH}"
+        try:
+            found = _json(get or urllib_get(10.0), jwks)
+            keys = found.get("keys") if isinstance(found, dict) and isinstance(found.get("keys"), list) else []
+        except AdmissionError:
+            keys = []
+    return check(doc, url, keys)
 
 
 class AdmissionFeed:
-    def __init__(self, data: Dict[str, Any]):
+    def __init__(self, data: Dict[str, Any], verified: Optional[bool] = None):
         if not isinstance(data, dict) or not isinstance(data.get("sellers"), list):
             raise ValueError("not an Agoranome admission feed")
         self.data = data
+        self.verified = verified   # True when from_url checked a signature; None when the feed was handed in
         self.sellers: Dict[str, Dict[str, Any]] = {str(s.get("host") or "").lower(): s for s in data["sellers"]
                                                    if isinstance(s, dict) and s.get("host")}
 
     @classmethod
-    def from_url(cls, url: str = DEFAULT_URL, timeout: float = 10.0, tier: Optional[str] = None) -> "AdmissionFeed":
-        """The feed; tier="sheet" asks for it with the sheet tier added."""
+    def from_url(cls, url: str = DEFAULT_URL, timeout: float = 10.0, tier: Optional[str] = None, *,
+                 verify: bool = True, keys: Optional[List[Dict[str, Any]]] = None,
+                 get: Optional[Getter] = None) -> "AdmissionFeed":
+        """The feed, its signature checked; tier="sheet" asks for it with the sheet tier added. `keys` pins the
+        signing keys (a JWKS's "keys"); verify=False skips the check (not advised: the feed becomes a wallet's
+        allowlist). Raises AdmissionError when no signature checks."""
         if tier is not None and tier not in _RANK:
             raise ValueError("tier must be sheet, observed or certified")
+        if urlsplit(url).scheme != "https":
+            raise AdmissionError("the admission feed is read over https only")
         if tier == SHEET:
             url += ("&" if "?" in url else "?") + "tier=sheet"
-        request = urllib.request.Request(url, headers={"Accept": "application/json",
-                                                       "User-Agent": "agoranome-policy"})
-        with urllib.request.urlopen(request, timeout=timeout) as response:   # noqa: S310 (https by default)
-            return cls(json.loads(response.read().decode("utf-8")))
+        get = get or urllib_get(timeout)
+        doc = _json(get, url)
+        if not isinstance(doc, dict):
+            raise AdmissionError("not an Agoranome admission feed")
+        if not verify:
+            return cls(doc, verified=False)
+        checked = signatures(doc, url, keys, get)
+        if not any(s.get("verified") is True for s in checked):
+            why = "; ".join(sorted({str(s.get("why")) for s in checked if s.get("why")})) or "it carries none"
+            raise AdmissionError(f"no signature on the admission feed checks ({why})")
+        return cls(doc, verified=True)
 
     @property
     def day(self) -> Optional[str]:
