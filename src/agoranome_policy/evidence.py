@@ -39,19 +39,35 @@ CHECK_PATH = "/v1/fair-offer/check"
 EVIDENCE_PATH = "/v1/evidence/"
 
 Getter = Callable[[str], Tuple[int, bytes]]
+MAX_ANSWER_BYTES = 1_000_000   # a check, an evidence record, a feed: none comes near this
+CHUNK_BYTES = 1 << 20
 
 
 class EvidenceError(Exception):
     pass
 
 
-def urllib_get(timeout: float) -> Getter:
+def _read(response: Any, limit: int) -> bytes:
+    """At most `limit` bytes of a response body, read in chunks so a large limit allocates only what arrives."""
+    parts, size = [], 0
+    while size < limit:
+        chunk = response.read(min(CHUNK_BYTES, limit - size))
+        if not chunk:
+            break
+        parts.append(chunk)
+        size += len(chunk)
+    return b"".join(parts)
+
+
+def urllib_get(timeout: float, limit: int = MAX_ANSWER_BYTES) -> Getter:
+    """A GET that returns (status, body), reading at most `limit` bytes of the body. A caller that must tell a
+    whole file from a cut one asks for one byte more than it accepts, and refuses a body that long."""
     def get(url: str) -> Tuple[int, bytes]:
         request = urllib.request.Request(url, headers={"User-Agent": f"agoranome-policy/{__version__}",
                                                        "Accept": "application/json"})
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:   # noqa: S310 (https base)
-                return response.status, response.read(1_000_000)
+                return response.status, _read(response, limit)
         except urllib.error.HTTPError as e:
             return e.code, e.read(10_000)
         except (urllib.error.URLError, TimeoutError, OSError) as e:
